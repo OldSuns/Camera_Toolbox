@@ -1,0 +1,32 @@
+name: oldsun_camera_toolbox
+description: "OldSun相机工具箱 - 一款功能强大的相机工具应用，专为摄影爱好者和专业摄影师设计"
+publish_to: 'none'
+version: 1.0.1
+
+environment:
+  sdk: ^3.8.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+  exif: ^3.3.0
+  image_picker: ^1.0.7
+  file_picker: ^8.0.5
+  path_provider: ^2.1.2
+  intl: ^0.20.2
+  flutter_localizations:
+    sdk: flutter
+  provider: ^6.1.5
+  shared_preferences: ^2.2.2
+  file_selector: ^1.0.3
+  path: ^1.9.0
+  window_manager: ^0.5.1
+  permission_handler: ^11.3.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true

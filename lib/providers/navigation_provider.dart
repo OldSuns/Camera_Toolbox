@@ -1,0 +1,44 @@
+import 'package:flutter/material.dart';
+
+/// 导航状态管理
+class NavigationProvider with ChangeNotifier {
+  int _currentIndex = 0;
+
+  int get currentIndex => _currentIndex;
+
+  void setIndex(int index) {
+    _currentIndex = index;
+    notifyListeners();
+  }
+}
+
+/// 应用页面枚举
+enum AppPage { exifReader, rawManager, settings, about }
+
+extension AppPageExtension on AppPage {
+  String get title {
+    switch (this) {
+      case AppPage.exifReader:
+        return 'Exif读取器';
+      case AppPage.rawManager:
+        return '快速分片';
+      case AppPage.settings:
+        return '设置';
+      case AppPage.about:
+        return '关于';
+    }
+  }
+
+  IconData get icon {
+    switch (this) {
+      case AppPage.exifReader:
+        return Icons.photo_camera;
+      case AppPage.rawManager:
+        return Icons.folder;
+      case AppPage.settings:
+        return Icons.settings;
+      case AppPage.about:
+        return Icons.info_outline;
+    }
+  }
+}
