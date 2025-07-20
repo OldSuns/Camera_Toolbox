@@ -45,7 +45,7 @@ class ImagePickerService {
   static Future<File?> pickImageFromFile() async {
     try {
       final result = await FilePicker.platform.pickFiles(
-        type: FileType.image,
+        type: FileType.any,
         allowMultiple: false,
       );
 

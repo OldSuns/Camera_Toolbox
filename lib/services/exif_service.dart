@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
-import 'package:exif/exif.dart' as exif;
+import 'package:exif_reader/exif_reader.dart' as exif_reader;
 import '../models/exif_data.dart';
 import '../utils/exif_translator.dart';
 
@@ -15,24 +15,30 @@ class ExifService {
         return ExifData.error(filePath, '文件不存在');
       }
 
-      final bytes = await file.readAsBytes();
-      return await _readExifFromBytes(bytes, filePath);
-    } catch (e) {
-      return ExifData.error(filePath, '读取文件失败: ${e.toString()}');
-    }
-  }
+      final extension = filePath.toLowerCase().split('.').last;
+      Map<String, exif_reader.IfdTag> data;
 
-  /// 从字节数据读取EXIF信息
-  static Future<ExifData> _readExifFromBytes(
-    Uint8List bytes,
-    String filePath,
-  ) async {
-    try {
-      final data = await exif.readExifFromBytes(bytes);
+      // CR3格式的特殊处理，因为它还不支持从字节流中读取
+      if (extension == 'cr3') {
+        data = await exif_reader.readExifFromFile(file);
+      } else {
+        // 优化：只读取文件的前256KB
+        const int readLimit = 256 * 1024; // 256KB
+        final fileBytes = await file
+            .openRead(0, readLimit)
+            .expand((bytes) => bytes)
+            .toList();
+        data = await exif_reader.readExifFromBytes(
+          Uint8List.fromList(fileBytes),
+        );
+      }
 
       if (data.isEmpty) {
         return ExifData.empty(filePath);
       }
+
+      // 获取缩略图
+      final thumbnailBytes = _extractThumbnailBytes(data);
 
       // 过滤掉不需要的标签
       final filteredData = _filterExifData(data);
@@ -44,6 +50,7 @@ class ExifService {
         rawData: Map<String, dynamic>.from(data),
         translatedData: translatedData,
         imagePath: filePath,
+        thumbnailBytes: thumbnailBytes,
         hasExif: true,
       );
     } catch (e) {
@@ -51,8 +58,61 @@ class ExifService {
     }
   }
 
+  /// 从EXIF数据中安全地提取预览图字节
+  static Uint8List? _extractThumbnailBytes(
+    Map<String, exif_reader.IfdTag> data,
+  ) {
+    try {
+      // 优先尝试通过 'JPEGThumbnail' 标签直接获取
+      if (data.containsKey('JPEGThumbnail')) {
+        final thumbnailTag = data['JPEGThumbnail'];
+        if (thumbnailTag != null && thumbnailTag.values.toList().isNotEmpty) {
+          return Uint8List.fromList(thumbnailTag.values.toList().cast<int>());
+        }
+      }
+
+      // 其次，尝试使用偏移量和长度从 'Thumbnail' 数据块中提取
+      if (data.containsKey('Thumbnail JPEGInterchangeFormat') &&
+          data.containsKey('Thumbnail JPEGInterchangeFormatLength') &&
+          data.containsKey('Thumbnail')) {
+        final offsetTag = data['Thumbnail JPEGInterchangeFormat'];
+        final lengthTag = data['Thumbnail JPEGInterchangeFormatLength'];
+        final rawDataTag = data['Thumbnail'];
+
+        if (offsetTag != null &&
+            lengthTag != null &&
+            rawDataTag != null &&
+            offsetTag.values.toList().isNotEmpty &&
+            lengthTag.values.toList().isNotEmpty &&
+            rawDataTag.values.toList().isNotEmpty) {
+          final offset = offsetTag.values.toList().first as int;
+          final length = lengthTag.values.toList().first as int;
+          final bytes = rawDataTag.values.toList().cast<int>();
+
+          if (bytes.length >= offset + length) {
+            return Uint8List.fromList(bytes.sublist(offset, offset + length));
+          }
+        }
+      }
+
+      // 最后，作为备用方案，直接返回 'Thumbnail' 标签的内容
+      if (data.containsKey('Thumbnail')) {
+        final thumbnailTag = data['Thumbnail'];
+        if (thumbnailTag != null && thumbnailTag.values.toList().isNotEmpty) {
+          return Uint8List.fromList(thumbnailTag.values.toList().cast<int>());
+        }
+      }
+    } catch (e) {
+      // 如果提取失败，静默处理，返回null
+      return null;
+    }
+    return null;
+  }
+
   /// 过滤EXIF数据，移除不需要的标签
-  static Map<String, dynamic> _filterExifData(Map<String, exif.IfdTag> data) {
+  static Map<String, dynamic> _filterExifData(
+    Map<String, exif_reader.IfdTag> data,
+  ) {
     final filtered = <String, dynamic>{};
 
     // 定义需要保留的标签
@@ -261,7 +321,22 @@ class ExifService {
   /// 检查文件是否为支持的图片格式
   static bool isSupportedImage(String filePath) {
     final extension = filePath.toLowerCase().split('.').last;
-    return ['jpg', 'jpeg', 'png', 'tiff', 'tif', 'webp'].contains(extension);
+    return [
+      'jpg',
+      'jpeg',
+      'png',
+      'tiff',
+      'tif',
+      'webp',
+      'arw',
+      'raw',
+      'dng',
+      'crw',
+      'cr3',
+      'nrw',
+      'nef',
+      'raf',
+    ].contains(extension);
   }
 
   /// 获取图片基本信息

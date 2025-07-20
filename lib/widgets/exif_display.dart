@@ -144,7 +144,7 @@ class ExifDisplayWidget extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
         leading: CircleAvatar(
-          backgroundColor: color.withValues(alpha: 0.1),
+          backgroundColor: color.withAlpha((255 * 0.1).round()),
           child: Icon(icon, color: color),
         ),
         title: Text(

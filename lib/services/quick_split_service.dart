@@ -131,10 +131,9 @@ class QuickSplitService {
       throw DirectoryNotFoundException(rawDirectory);
     }
 
-    // if (rawFiles.isEmpty) {
-    //   // 这个检查可以省略，因为如果rawFiles为空，后面的匹配结果matches也会为空
-    //   // UI层会捕获NoMatchingRawFilesException
-    // }
+    if (rawFiles.isEmpty) {
+      throw NoRawFilesFoundException(rawDirectory);
+    }
 
     // 匹配文件
     for (final imageFile in imageFiles) {

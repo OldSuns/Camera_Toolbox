@@ -28,3 +28,9 @@ class NoMatchingRawFilesException extends QuickSplitException {
 class OutputDirectoryCreationException extends QuickSplitException {
   OutputDirectoryCreationException(String path) : super('创建输出目录失败: $path');
 }
+
+/// 在指定目录中未找到任何RAW文件
+class NoRawFilesFoundException extends QuickSplitException {
+  NoRawFilesFoundException(String directory)
+    : super('在目录 "$directory" 中未找到任何受支持的RAW文件。');
+}

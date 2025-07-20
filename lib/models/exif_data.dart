@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 /// EXIF数据模型类
 /// 用于存储和管理从图片中读取的EXIF信息
 class ExifData {
@@ -16,10 +18,14 @@ class ExifData {
   /// 错误信息（如果有）
   final String? errorMessage;
 
+  /// 缩略图数据
+  final Uint8List? thumbnailBytes;
+
   ExifData({
     required this.rawData,
     required this.translatedData,
     required this.imagePath,
+    this.thumbnailBytes,
     this.hasExif = true,
     this.errorMessage,
   });
@@ -53,6 +59,7 @@ class ExifData {
       imagePath: imagePath,
       hasExif: false,
       errorMessage: '未找到EXIF信息',
+      thumbnailBytes: null,
     );
   }
 
@@ -64,6 +71,7 @@ class ExifData {
       imagePath: imagePath,
       hasExif: false,
       errorMessage: error,
+      thumbnailBytes: null,
     );
   }
 }

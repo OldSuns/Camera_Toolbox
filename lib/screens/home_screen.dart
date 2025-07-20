@@ -25,12 +25,11 @@ class _HomeScreenState extends State<HomeScreen> {
     const AboutScreen(),
   ];
 
-  final List<String> _pageTitles = ['EXIF读取', '快速分片', '设置', 'OldSun相机工具箱'];
-
   void _onDestinationSelected(int index) {
     Provider.of<NavigationProvider>(context, listen: false).setIndex(index);
     if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
-      windowManager.setTitle(_pageTitles[index]);
+      // 从 AppPage 枚举动态获取标题，确保一致性
+      windowManager.setTitle('OldSun相机工具箱 - ${AppPage.values[index].title}');
     }
   }
 

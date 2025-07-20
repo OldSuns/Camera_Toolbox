@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../providers/navigation_provider.dart';
 import '../../widgets/common/responsive_layout.dart';
 
 /// 自适应导航组件
@@ -14,26 +15,42 @@ class AdaptiveNavigation extends StatelessWidget {
     required this.currentIndex,
   });
 
+  List<NavigationDestinationInfo> get _destinations => AppPage.values
+      .map(
+        (page) => NavigationDestinationInfo(title: page.title, icon: page.icon),
+      )
+      .toList();
+
   @override
   Widget build(BuildContext context) {
     return ResponsiveLayout(
       mobileLayout: _MobileNavigation(
         onDestinationSelected: onDestinationSelected,
         currentIndex: currentIndex,
+        destinations: _destinations,
         child: child,
       ),
       tabletLayout: _TabletNavigation(
         onDestinationSelected: onDestinationSelected,
         currentIndex: currentIndex,
+        destinations: _destinations,
         child: child,
       ),
       desktopLayout: _DesktopNavigation(
         onDestinationSelected: onDestinationSelected,
         currentIndex: currentIndex,
+        destinations: _destinations,
         child: child,
       ),
     );
   }
+}
+
+class NavigationDestinationInfo {
+  final String title;
+  final IconData icon;
+
+  NavigationDestinationInfo({required this.title, required this.icon});
 }
 
 /// 移动端导航（Drawer）
@@ -41,35 +58,22 @@ class _MobileNavigation extends StatelessWidget {
   final Widget child;
   final Function(int) onDestinationSelected;
   final int currentIndex;
+  final List<NavigationDestinationInfo> destinations;
 
   const _MobileNavigation({
     required this.child,
     required this.onDestinationSelected,
     required this.currentIndex,
+    required this.destinations,
   });
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(_getPageTitle(currentIndex))),
+      appBar: AppBar(title: Text(destinations[currentIndex].title)),
       drawer: _buildDrawer(context),
       body: child,
     );
-  }
-
-  String _getPageTitle(int index) {
-    switch (index) {
-      case 0:
-        return 'Exif读取器';
-      case 1:
-        return '快速分片';
-      case 2:
-        return '设置';
-      case 3:
-        return '关于';
-      default:
-        return 'OldSun相机工具箱';
-    }
   }
 
   Widget _buildDrawer(BuildContext context) {
@@ -96,29 +100,18 @@ class _MobileNavigation extends StatelessWidget {
               ],
             ),
           ),
-          _buildDrawerItem(context, 0, Icons.photo_camera, 'Exif读取器'),
-          _buildDrawerItem(context, 1, Icons.folder, '快速分片'),
-          _buildDrawerItem(context, 2, Icons.settings, '设置'),
-          _buildDrawerItem(context, 3, Icons.info_outline, '关于'),
+          for (int i = 0; i < destinations.length; i++)
+            ListTile(
+              leading: Icon(destinations[i].icon),
+              title: Text(destinations[i].title),
+              selected: currentIndex == i,
+              onTap: () {
+                onDestinationSelected(i);
+                Navigator.pop(context);
+              },
+            ),
         ],
       ),
-    );
-  }
-
-  Widget _buildDrawerItem(
-    BuildContext context,
-    int index,
-    IconData icon,
-    String title,
-  ) {
-    return ListTile(
-      leading: Icon(icon),
-      title: Text(title),
-      selected: currentIndex == index,
-      onTap: () {
-        onDestinationSelected(index);
-        Navigator.pop(context);
-      },
     );
   }
 }
@@ -128,11 +121,13 @@ class _TabletNavigation extends StatelessWidget {
   final Widget child;
   final Function(int) onDestinationSelected;
   final int currentIndex;
+  final List<NavigationDestinationInfo> destinations;
 
   const _TabletNavigation({
     required this.child,
     required this.onDestinationSelected,
     required this.currentIndex,
+    required this.destinations,
   });
 
   @override
@@ -142,24 +137,14 @@ class _TabletNavigation extends StatelessWidget {
         children: [
           NavigationRail(
             extended: MediaQuery.of(context).size.width >= 800,
-            destinations: const [
-              NavigationRailDestination(
-                icon: Icon(Icons.photo_camera),
-                label: Text('Exif读取器'),
-              ),
-              NavigationRailDestination(
-                icon: Icon(Icons.folder),
-                label: Text('快速分片'),
-              ),
-              NavigationRailDestination(
-                icon: Icon(Icons.settings),
-                label: Text('设置'),
-              ),
-              NavigationRailDestination(
-                icon: Icon(Icons.info_outline),
-                label: Text('关于'),
-              ),
-            ],
+            destinations: destinations
+                .map(
+                  (d) => NavigationRailDestination(
+                    icon: Icon(d.icon),
+                    label: Text(d.title),
+                  ),
+                )
+                .toList(),
             selectedIndex: currentIndex,
             onDestinationSelected: onDestinationSelected,
           ),
@@ -176,11 +161,13 @@ class _DesktopNavigation extends StatelessWidget {
   final Widget child;
   final Function(int) onDestinationSelected;
   final int currentIndex;
+  final List<NavigationDestinationInfo> destinations;
 
   const _DesktopNavigation({
     required this.child,
     required this.onDestinationSelected,
     required this.currentIndex,
+    required this.destinations,
   });
 
   @override
@@ -193,30 +180,19 @@ class _DesktopNavigation extends StatelessWidget {
             child: NavigationDrawer(
               selectedIndex: currentIndex,
               onDestinationSelected: onDestinationSelected,
-              children: const [
-                Padding(
+              children: [
+                const Padding(
                   padding: EdgeInsets.fromLTRB(28, 16, 16, 10),
                   child: Text(
                     'OldSun相机工具箱',
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                   ),
                 ),
-                NavigationDrawerDestination(
-                  icon: Icon(Icons.photo_camera),
-                  label: Text('Exif读取器'),
-                ),
-                NavigationDrawerDestination(
-                  icon: Icon(Icons.folder),
-                  label: Text('快速分片'),
-                ),
-                NavigationDrawerDestination(
-                  icon: Icon(Icons.settings),
-                  label: Text('设置'),
-                ),
-                NavigationDrawerDestination(
-                  icon: Icon(Icons.info_outline),
-                  label: Text('关于'),
-                ),
+                for (final dest in destinations)
+                  NavigationDrawerDestination(
+                    icon: Icon(dest.icon),
+                    label: Text(dest.title),
+                  ),
               ],
             ),
           ),
