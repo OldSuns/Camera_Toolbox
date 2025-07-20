@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../models/exif_data.dart';
+import 'exif_data.dart';
 
 /// EXIF信息展示组件
 class ExifDisplayWidget extends StatelessWidget {

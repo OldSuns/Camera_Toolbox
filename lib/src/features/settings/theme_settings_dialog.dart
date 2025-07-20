@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../../models/theme_config.dart';
-import '../../providers/theme_provider.dart';
+import '../../config/theme_config.dart';
+import '../../shared/providers/theme_provider.dart';
 
 /// 主题设置对话框
 class ThemeSettingsDialog extends StatefulWidget {

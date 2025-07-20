@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import '../../providers/navigation_provider.dart';
-import '../../widgets/common/responsive_layout.dart';
+import '../providers/navigation_provider.dart';
+import 'responsive_layout.dart';
 
 /// 自适应导航组件
 class AdaptiveNavigation extends StatelessWidget {

@@ -2,10 +2,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
-import '../../models/exif_data.dart';
-import '../../services/exif_service.dart';
-import '../../services/image_picker_service.dart';
-import '../../widgets/exif_display.dart';
+import 'exif_data.dart';
+import 'exif_service.dart';
+import '../../shared/services/image_picker_service.dart';
+import 'exif_display.dart';
 
 /// ExifReaderScreen - A feature-rich screen for reading EXIF data from images.
 ///

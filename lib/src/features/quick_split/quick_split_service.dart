@@ -1,5 +1,5 @@
 import 'dart:io';
-import 'package:oldsun_camera_toolbox/models/quick_split_exception.dart';
+import 'quick_split_exception.dart';
 import 'package:path/path.dart' as path;
 
 /// 快速分片服务 - 处理JPG-RAW文件匹配和拷贝

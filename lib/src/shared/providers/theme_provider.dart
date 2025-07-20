@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../models/theme_config.dart';
+import '../../config/theme_config.dart';
 
 /// 主题状态管理
 class ThemeProvider with ChangeNotifier {

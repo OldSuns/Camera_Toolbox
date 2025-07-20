@@ -1,8 +1,8 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:exif_reader/exif_reader.dart' as exif_reader;
-import '../models/exif_data.dart';
-import '../utils/exif_translator.dart';
+import 'exif_data.dart';
+import 'exif_translator.dart';
 
 /// EXIF信息读取服务
 /// 负责从图片文件中读取EXIF信息

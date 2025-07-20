@@ -2,12 +2,12 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
-import '../widgets/navigation/adaptive_navigation.dart';
-import '../providers/navigation_provider.dart';
-import 'exif_reader/exif_reader_screen.dart';
-import 'quick_split/quick_split_screen.dart';
-import 'settings/settings_screen.dart';
-import 'about/about_screen.dart';
+import '../../shared/widgets/adaptive_navigation.dart';
+import '../../shared/providers/navigation_provider.dart';
+import '../exif_reader/exif_reader_screen.dart';
+import '../quick_split/quick_split_screen.dart';
+import '../settings/settings_screen.dart';
+import '../about/about_screen.dart';
 
 /// 主页面框架
 class HomeScreen extends StatefulWidget {

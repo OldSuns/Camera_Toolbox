@@ -3,9 +3,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
-import 'providers/theme_provider.dart';
-import 'providers/navigation_provider.dart';
-import 'screens/home_screen.dart';
+import 'src/shared/providers/theme_provider.dart';
+import 'src/shared/providers/navigation_provider.dart';
+import 'src/features/home/home_screen.dart';
 
 /// 应用程序的主入口点。
 void main() async {
