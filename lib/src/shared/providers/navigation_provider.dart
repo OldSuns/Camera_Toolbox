@@ -13,13 +13,15 @@ class NavigationProvider with ChangeNotifier {
 }
 
 /// 应用页面枚举
-enum AppPage { exifReader, rawManager, settings, about }
+enum AppPage { exifReader, localPicker, rawManager, settings, about }
 
 extension AppPageExtension on AppPage {
   String get title {
     switch (this) {
       case AppPage.exifReader:
         return 'Exif读取器';
+      case AppPage.localPicker:
+        return '本地选片';
       case AppPage.rawManager:
         return '快速分片';
       case AppPage.settings:
@@ -33,6 +35,8 @@ extension AppPageExtension on AppPage {
     switch (this) {
       case AppPage.exifReader:
         return Icons.photo_camera;
+      case AppPage.localPicker:
+        return Icons.photo_library_outlined;
       case AppPage.rawManager:
         return Icons.folder;
       case AppPage.settings:

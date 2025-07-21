@@ -5,6 +5,7 @@ import 'package:window_manager/window_manager.dart';
 import '../../shared/widgets/adaptive_navigation.dart';
 import '../../shared/providers/navigation_provider.dart';
 import '../exif_reader/exif_reader_screen.dart';
+import '../local_picker/local_picker_screen.dart';
 import '../quick_split/quick_split_screen.dart';
 import '../settings/settings_screen.dart';
 import '../about/about_screen.dart';
@@ -20,6 +21,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final List<Widget> _pages = [
     const ExifReaderScreen(),
+    const LocalPickerScreen(),
     const QuickSplitScreen(),
     const SettingsScreen(),
     const AboutScreen(),
