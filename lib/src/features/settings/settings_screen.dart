@@ -28,7 +28,6 @@ class SettingsScreen extends StatelessWidget {
               );
             },
           ),
-          // 已删除：语言设置、隐私设置、帮助与反馈选项
         ],
       ),
     );

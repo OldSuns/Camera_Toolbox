@@ -19,6 +19,12 @@ class LocalPickerProvider with ChangeNotifier {
   int _currentImageIndex = 0;
   int get currentImageIndex => _currentImageIndex;
 
+  bool _isExporting = false;
+  bool get isExporting => _isExporting;
+
+  double _exportProgress = 0.0;
+  double get exportProgress => _exportProgress;
+
   void setLoading(bool value) {
     _isLoading = value;
     notifyListeners();
@@ -114,16 +120,28 @@ class LocalPickerProvider with ChangeNotifier {
     try {
       String? targetDirectory = await FilePicker.platform.getDirectoryPath();
       if (targetDirectory != null) {
+        _isExporting = true;
+        _exportProgress = 0.0;
+        notifyListeners();
+
+        int i = 0;
         for (var imageFile in _selectedImages) {
           final newPath = p.join(targetDirectory, p.basename(imageFile.path));
           await imageFile.copy(newPath);
+          i++;
+          _exportProgress = i / _selectedImages.length;
+          notifyListeners();
         }
+
         scaffoldMessenger.showSnackBar(
           SnackBar(content: Text('成功导出 ${_selectedImages.length} 张图片')),
         );
       }
     } catch (e) {
       scaffoldMessenger.showSnackBar(SnackBar(content: Text('导出失败: $e')));
+    } finally {
+      _isExporting = false;
+      notifyListeners();
     }
   }
 }

@@ -22,33 +22,15 @@ class AboutScreen extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               const Text(
-                '版本 1.0.2',
+                '版本 1.0.3',
                 style: TextStyle(fontSize: 16, color: Colors.grey),
               ),
               const SizedBox(height: 24),
               const Text(
-                '一款功能强大的相机工具应用，专为摄影爱好者和专业摄影师设计。支持EXIF元数据深度解析、快速分片等多种实用功能，让您的摄影工作流程更加高效。',
+                '一款相机工具应用。由Flutter提供底层支持',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 16),
               ),
-              const SizedBox(height: 32),
-              const Text(
-                '功能特性：',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                '• EXIF元数据深度解析与翻译\n'
-                '• 支持JPEG、PNG、HEIC、RAW等多种格式\n'
-                '• RAW+JPG智能匹配与分组管理\n'
-                '• 快速分割模式，一键分离处理\n'
-                '• 批量文件处理与重命名\n'
-                '• 跨平台响应式设计\n'
-                '• 深色/浅色主题切换',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 14),
-              ),
-              const SizedBox(height: 32),
             ],
           ),
         ),

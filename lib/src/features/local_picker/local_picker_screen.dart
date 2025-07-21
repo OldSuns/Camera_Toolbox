@@ -30,6 +30,19 @@ class _LocalPickerScreenState extends State<LocalPickerScreen> {
             body: Column(
               children: [
                 _buildTopBar(context, provider),
+                if (provider.isExporting)
+                  Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Column(
+                      children: [
+                        LinearProgressIndicator(value: provider.exportProgress),
+                        const SizedBox(height: 8),
+                        Text(
+                          '导出中... ${(provider.exportProgress * 100).toStringAsFixed(0)}%',
+                        ),
+                      ],
+                    ),
+                  ),
                 Expanded(
                   child: provider.isLoading
                       ? const Center(child: CircularProgressIndicator())
@@ -189,7 +202,9 @@ class _LocalPickerScreenState extends State<LocalPickerScreen> {
           ),
           const SizedBox(width: 24),
           ElevatedButton(
-            onPressed: () => provider.exportSelected(context),
+            onPressed: provider.isExporting
+                ? null
+                : () => provider.exportSelected(context),
             child: const Text('导出'),
           ),
         ],

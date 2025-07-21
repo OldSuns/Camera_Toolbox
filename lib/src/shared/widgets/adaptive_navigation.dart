@@ -176,7 +176,7 @@ class _DesktopNavigation extends StatelessWidget {
       body: Row(
         children: [
           SizedBox(
-            width: 200,
+            width: 280,
             child: NavigationDrawer(
               selectedIndex: currentIndex,
               onDestinationSelected: onDestinationSelected,
