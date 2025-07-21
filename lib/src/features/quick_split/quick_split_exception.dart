@@ -34,3 +34,14 @@ class NoRawFilesFoundException extends QuickSplitException {
   NoRawFilesFoundException(String directory)
     : super('在目录 "$directory" 中未找到任何受支持的RAW文件。');
 }
+
+/// 源文件在复制过程中不存在
+class SourceFileNotFoundException extends QuickSplitException {
+  SourceFileNotFoundException(String path) : super('源文件在复制过程中不存在: $path');
+}
+
+/// 文件复制失败
+class FileCopyException extends QuickSplitException {
+  FileCopyException(String source, String dest, String reason)
+    : super('文件复制失败: $source -> $dest, 原因: $reason');
+}
