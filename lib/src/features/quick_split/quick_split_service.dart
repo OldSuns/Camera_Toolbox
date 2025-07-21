@@ -115,14 +115,17 @@ class QuickSplitService {
       throw DirectoryNotFoundException(rawDirectory);
     }
 
-    // 获取所有RAW文件
-    final rawFiles = <String>[];
+    // 优化: 使用Set进行O(1)复杂度的查找
+    final rawFileMap = <String, String>{};
     try {
       await for (final entity in rawDir.list(recursive: true)) {
         if (entity is File) {
           final extension = path.extension(entity.path).toLowerCase();
           if (supportedRawFormats.contains(extension)) {
-            rawFiles.add(entity.path);
+            final rawName = path
+                .basenameWithoutExtension(entity.path)
+                .toLowerCase();
+            rawFileMap[rawName] = entity.path;
           }
         }
       }
@@ -131,20 +134,18 @@ class QuickSplitService {
       throw DirectoryNotFoundException(rawDirectory);
     }
 
-    if (rawFiles.isEmpty) {
+    if (rawFileMap.isEmpty) {
       throw NoRawFilesFoundException(rawDirectory);
     }
 
-    // 匹配文件
+    final rawFileNames = rawFileMap.keys.toSet();
+
+    // 匹配文件 - O(N)
     for (final imageFile in imageFiles) {
       final imageName = path.basenameWithoutExtension(imageFile).toLowerCase();
-
-      for (final rawFile in rawFiles) {
-        final rawName = path.basenameWithoutExtension(rawFile).toLowerCase();
-        if (imageName == rawName) {
-          matches.add(RawMatch(imagePath: imageFile, rawPath: rawFile));
-          break;
-        }
+      if (rawFileNames.contains(imageName)) {
+        final rawPath = rawFileMap[imageName]!;
+        matches.add(RawMatch(imagePath: imageFile, rawPath: rawPath));
       }
     }
 

@@ -1,61 +1,71 @@
 import 'dart:io';
-import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:exif_reader/exif_reader.dart' as exif_reader;
 import 'exif_data.dart';
 import 'exif_translator.dart';
 
+/// 一个顶层函数，用于在独立的 Isolate 中执行 EXIF 解析。
+///
+/// [filePath] 是要解析的图片文件的路径。
+/// 这个函数包含了所有的文件 I/O 和 CPU 密集型解析工作，
+/// 从而避免阻塞 UI 线程。
+Future<ExifData> _parseExifDataInIsolate(String filePath) async {
+  try {
+    final file = File(filePath);
+    if (!await file.exists()) {
+      return ExifData.error(filePath, '文件不存在');
+    }
+
+    final extension = filePath.toLowerCase().split('.').last;
+    Map<String, exif_reader.IfdTag> data;
+
+    // CR3格式的特殊处理，因为它还不支持从字节流中读取
+    if (extension == 'cr3') {
+      data = await exif_reader.readExifFromFile(file);
+    } else {
+      // 优化：只读取文件的前256KB
+      const int readLimit = 256 * 1024; // 256KB
+      final fileBytes = await file
+          .openRead(0, readLimit)
+          .expand((bytes) => bytes)
+          .toList();
+      data = await exif_reader.readExifFromBytes(Uint8List.fromList(fileBytes));
+    }
+
+    if (data.isEmpty) {
+      return ExifData.empty(filePath);
+    }
+
+    // 获取缩略图
+    final thumbnailBytes = ExifService._extractThumbnailBytes(data);
+
+    // 过滤掉不需要的标签
+    final filteredData = ExifService._filterExifData(data);
+
+    // 翻译标签并格式化值
+    final translatedData = ExifService._translateAndFormatExifData(
+      filteredData,
+    );
+
+    return ExifData(
+      rawData: Map<String, dynamic>.from(data),
+      translatedData: translatedData,
+      imagePath: filePath,
+      thumbnailBytes: thumbnailBytes,
+      hasExif: true,
+    );
+  } catch (e) {
+    // 在 Isolate 中捕获异常并返回一个错误对象
+    return ExifData.error(filePath, '解析EXIF信息失败: ${e.toString()}');
+  }
+}
+
 /// EXIF信息读取服务
 /// 负责从图片文件中读取EXIF信息
 class ExifService {
-  /// 从文件路径读取EXIF信息
+  /// 从文件路径读取EXIF信息，此操作将在一个独立的 Isolate 中执行以避免UI卡顿。
   static Future<ExifData> readExifFromFile(String filePath) async {
-    try {
-      final file = File(filePath);
-      if (!await file.exists()) {
-        return ExifData.error(filePath, '文件不存在');
-      }
-
-      final extension = filePath.toLowerCase().split('.').last;
-      Map<String, exif_reader.IfdTag> data;
-
-      // CR3格式的特殊处理，因为它还不支持从字节流中读取
-      if (extension == 'cr3') {
-        data = await exif_reader.readExifFromFile(file);
-      } else {
-        // 优化：只读取文件的前256KB
-        const int readLimit = 256 * 1024; // 256KB
-        final fileBytes = await file
-            .openRead(0, readLimit)
-            .expand((bytes) => bytes)
-            .toList();
-        data = await exif_reader.readExifFromBytes(
-          Uint8List.fromList(fileBytes),
-        );
-      }
-
-      if (data.isEmpty) {
-        return ExifData.empty(filePath);
-      }
-
-      // 获取缩略图
-      final thumbnailBytes = _extractThumbnailBytes(data);
-
-      // 过滤掉不需要的标签
-      final filteredData = _filterExifData(data);
-
-      // 翻译标签并格式化值
-      final translatedData = _translateAndFormatExifData(filteredData);
-
-      return ExifData(
-        rawData: Map<String, dynamic>.from(data),
-        translatedData: translatedData,
-        imagePath: filePath,
-        thumbnailBytes: thumbnailBytes,
-        hasExif: true,
-      );
-    } catch (e) {
-      return ExifData.error(filePath, '解析EXIF信息失败: ${e.toString()}');
-    }
+    return await compute(_parseExifDataInIsolate, filePath);
   }
 
   /// 从EXIF数据中安全地提取预览图字节

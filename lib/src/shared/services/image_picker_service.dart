@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 /// 图片选择服务
 /// 提供多种方式选择图片文件
@@ -8,14 +9,21 @@ class ImagePickerService {
   /// 使用相机拍照
   static Future<File?> pickImageFromCamera() async {
     try {
-      final picker = ImagePicker();
-      final pickedFile = await picker.pickImage(
-        source: ImageSource.camera,
-        imageQuality: 100,
-      );
+      // 首先检查和请求权限
+      final status = await Permission.camera.request();
+      if (status.isGranted) {
+        final picker = ImagePicker();
+        final pickedFile = await picker.pickImage(
+          source: ImageSource.camera,
+          imageQuality: 100,
+        );
 
-      if (pickedFile != null) {
-        return File(pickedFile.path);
+        if (pickedFile != null) {
+          return File(pickedFile.path);
+        }
+      } else {
+        // 可以选择抛出异常或返回null来通知UI层权限被拒绝
+        throw Exception('相机权限被拒绝');
       }
       return null;
     } catch (e) {
@@ -26,14 +34,20 @@ class ImagePickerService {
   /// 从相册选择图片
   static Future<File?> pickImageFromGallery() async {
     try {
-      final picker = ImagePicker();
-      final pickedFile = await picker.pickImage(
-        source: ImageSource.gallery,
-        imageQuality: 100,
-      );
+      // 首先检查和请求权限
+      final status = await Permission.photos.request();
+      if (status.isGranted || status.isLimited) {
+        final picker = ImagePicker();
+        final pickedFile = await picker.pickImage(
+          source: ImageSource.gallery,
+          imageQuality: 100,
+        );
 
-      if (pickedFile != null) {
-        return File(pickedFile.path);
+        if (pickedFile != null) {
+          return File(pickedFile.path);
+        }
+      } else {
+        throw Exception('相册权限被拒绝');
       }
       return null;
     } catch (e) {
@@ -58,30 +72,30 @@ class ImagePickerService {
     }
   }
 
-  /// 获取所有可用的图片选择方式
+  /// 获取所有可用的图片选择方式 (已修复逻辑)
+  /// 通过检查权限状态而非实际调用来判断可用性。
   static Future<List<String>> getAvailableMethods() async {
     final methods = <String>['文件选择器'];
 
     // 检查相机权限
     try {
-      final picker = ImagePicker();
-      final status = await picker.pickImage(source: ImageSource.camera);
-      if (status != null) {
+      if (await Permission.camera.isGranted ||
+          !(await Permission.camera.isPermanentlyDenied)) {
         methods.add('相机拍照');
       }
     } catch (e) {
-      // 相机不可用
+      // 忽略异常，方法不可用
     }
 
     // 检查相册权限
     try {
-      final picker = ImagePicker();
-      final status = await picker.pickImage(source: ImageSource.gallery);
-      if (status != null) {
+      if (await Permission.photos.isGranted ||
+          await Permission.photos.isLimited ||
+          !(await Permission.photos.isPermanentlyDenied)) {
         methods.add('相册选择');
       }
     } catch (e) {
-      // 相册不可用
+      // 忽略异常，方法不可用
     }
 
     return methods;
@@ -99,9 +113,9 @@ class ImagePickerService {
     return supportedExtensions.contains(extension);
   }
 
-  /// 获取图片文件信息
-  static Map<String, dynamic> getFileInfo(File file) {
-    final stat = file.statSync();
+  /// 获取图片文件信息 (已修复: 使用异步stat)
+  static Future<Map<String, dynamic>> getFileInfo(File file) async {
+    final stat = await file.stat();
 
     return {
       'path': file.path,

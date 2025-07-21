@@ -1,8 +1,7 @@
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
-import 'package:file_selector/file_selector.dart';
 
-/// 文件选择服务 - 混合使用file_picker和file_selector以实现最佳兼容性
+/// 文件选择服务 - 使用file_picker以实现最佳兼容性
 class FileSelectorService {
   /// 选择单个目录 - 使用file_picker以获取真实路径
   static Future<String?> selectDirectory() async {
@@ -12,8 +11,11 @@ class FileSelectorService {
 
   /// 选择多个目录
   static Future<List<String>?> selectMultipleDirectories() async {
-    final directories = await getDirectoryPaths();
-    return directories.map((e) => e.toString()).toList();
+    // file_picker doesn't directly support picking multiple directories.
+    // This implementation is a workaround and might not be ideal.
+    // For now, we'll just allow picking a single directory.
+    final directory = await FilePicker.platform.getDirectoryPath();
+    return directory != null ? [directory] : null;
   }
 
   /// 选择单个文件
@@ -21,19 +23,14 @@ class FileSelectorService {
     List<String>? allowedExtensions,
     String? initialDirectory,
   }) async {
-    final extensions =
-        allowedExtensions ?? ['jpg', 'jpeg', 'png', 'tiff', 'tif'];
-    final XTypeGroup typeGroup = XTypeGroup(
-      label: 'Images',
-      extensions: extensions,
-    );
-
-    final file = await openFile(
-      acceptedTypeGroups: [typeGroup],
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions:
+          allowedExtensions ?? ['jpg', 'jpeg', 'png', 'tiff', 'tif'],
       initialDirectory: initialDirectory,
     );
 
-    return file?.path;
+    return result?.files.single.path;
   }
 
   /// 选择多个文件
@@ -41,19 +38,15 @@ class FileSelectorService {
     List<String>? allowedExtensions,
     String? initialDirectory,
   }) async {
-    final extensions =
-        allowedExtensions ?? ['jpg', 'jpeg', 'png', 'tiff', 'tif'];
-    final XTypeGroup typeGroup = XTypeGroup(
-      label: 'Images',
-      extensions: extensions,
-    );
-
-    final files = await openFiles(
-      acceptedTypeGroups: [typeGroup],
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions:
+          allowedExtensions ?? ['jpg', 'jpeg', 'png', 'tiff', 'tif'],
       initialDirectory: initialDirectory,
+      allowMultiple: true,
     );
 
-    return files.map((file) => file.path).toList();
+    return result?.files.map((file) => file.path!).toList();
   }
 
   /// 检查目录是否存在且有权限访问
