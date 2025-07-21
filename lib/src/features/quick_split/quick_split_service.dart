@@ -158,6 +158,7 @@ class QuickSplitService {
     ConflictAction action,
   ) async {
     final file = File(destPath);
+    await file.parent.create(recursive: true);
     final exists = await file.exists();
 
     if (!exists) {

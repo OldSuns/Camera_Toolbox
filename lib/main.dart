@@ -55,6 +55,14 @@ class CameraToolboxApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 根据平台确定字体系列
+    String? getFontFamily() {
+      if (Platform.isWindows) {
+        return 'Microsoft YaHei';
+      }
+      return null; // 其他平台使用系统默认字体
+    }
+
     // 使用Consumer来监听ThemeProvider的变化，并根据其状态构建UI。
     return Consumer<ThemeProvider>(
       builder: (context, themeProvider, child) {
@@ -65,12 +73,22 @@ class CameraToolboxApp extends StatelessWidget {
           );
         }
 
+        final fontFamily = getFontFamily();
+
         // 主题加载完成后，构建MaterialApp。
         return MaterialApp(
           title: 'OldSun相机工具箱',
           debugShowCheckedModeBanner: false, // 隐藏调试横幅
-          theme: themeProvider.lightTheme, // 设置浅色主题
-          darkTheme: themeProvider.darkTheme, // 设置深色主题
+          theme: themeProvider.lightTheme.copyWith(
+            textTheme: themeProvider.lightTheme.textTheme.apply(
+              fontFamily: fontFamily,
+            ),
+          ), // 设置浅色主题
+          darkTheme: themeProvider.darkTheme.copyWith(
+            textTheme: themeProvider.darkTheme.textTheme.apply(
+              fontFamily: fontFamily,
+            ),
+          ), // 设置深色主题
           themeMode: themeProvider.themeMode, // 根据提供者设置主题模式
           home: const HomeScreen(), // 设置主屏幕
         );
