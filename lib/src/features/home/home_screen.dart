@@ -18,7 +18,8 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen>
+    with AutomaticKeepAliveClientMixin {
   final List<Widget> _pages = [
     const ExifReaderScreen(),
     const LocalPickerScreen(),
@@ -36,13 +37,20 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   @override
+  bool get wantKeepAlive => true;
+
+  @override
   Widget build(BuildContext context) {
+    super.build(context);
     return Consumer<NavigationProvider>(
       builder: (context, navigationProvider, child) {
         return AdaptiveNavigation(
           currentIndex: navigationProvider.currentIndex,
           onDestinationSelected: _onDestinationSelected,
-          child: _pages[navigationProvider.currentIndex],
+          child: IndexedStack(
+            index: navigationProvider.currentIndex,
+            children: _pages,
+          ),
         );
       },
     );

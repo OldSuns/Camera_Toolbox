@@ -9,8 +9,14 @@
 - **Windows:** 明确指定使用 "Microsoft YaHei" 字体。
 - **其他平台 (macOS, Linux, Android, iOS):** 不指定 `fontFamily`，以使用各自的系统默认字体。
 **执行者:** `code-developer`
-**状态:** 已完成---### 决策 (2025-07-21T16:44:40Z)
-**决策:** 在 `quick_split_service.dart` 的 `_handleFileConflict` 方法中，执行任何文件系统操作（如 `file.exists()`）之前，必须先确保目标文件的父目录存在。
-**理由:** `error-debugger` 的分析指出，当目标文件的父目录不存在时，`file.exists()` 会触发 `PathNotFoundException`。为了防止此错误，需要在操作前递归创建目录。
+**状态:** 已完成
+---
+### 决策 (2025-07-22T07:09:57Z)
+**决策:** 使用 `IndexedStack` 和 `AutomaticKeepAliveClientMixin` 解决页面状态丢失问题。
+**理由:** 在调整窗口大小或切换导航时，页面会重新构建，导致状态丢失。`IndexedStack` 可以保持所有子 Widget 的状态，而 `AutomaticKeepAliveClientMixin` 则能防止 State 被销毁。
+**实施:**
+- 在 `lib/src/features/home/home_screen.dart` 中，使用 `IndexedStack` 替换直接的页面索引访问。
+- 为 `_HomeScreenState` 添加 `AutomaticKeepAliveClientMixin`。
+- 重构 `lib/src/shared/widgets/adaptive_navigation.dart` 以在所有布局中使用单一 `Scaffold`，确保 `IndexedStack` 不会因布局变化而重建。
 **执行者:** `code-developer`
-**状态:** 待执行
+**状态:** 已完成
