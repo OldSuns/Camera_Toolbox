@@ -55,7 +55,7 @@ void _thumbnailGenerator(SendPort sendPort) {
 }
 
 class LocalPickerProvider with ChangeNotifier {
-  List<String> _imagePaths = [];
+  final List<String> _imagePaths = [];
   List<String> get imagePaths => _imagePaths;
   String? _currentDirectory;
   bool _hasMore = true;

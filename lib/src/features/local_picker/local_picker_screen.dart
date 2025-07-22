@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:flutter/services.dart';
@@ -19,7 +18,7 @@ class LocalPickerScreen extends StatelessWidget {
 }
 
 class _LocalPickerView extends StatefulWidget {
-  const _LocalPickerView({Key? key}) : super(key: key);
+  const _LocalPickerView();
 
   @override
   State<_LocalPickerView> createState() => _LocalPickerViewState();

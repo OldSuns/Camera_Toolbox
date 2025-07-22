@@ -22,12 +22,12 @@ class AboutScreen extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               const Text(
-                '版本 1.0.3',
+                '版本 1.0.4',
                 style: TextStyle(fontSize: 16, color: Colors.grey),
               ),
               const SizedBox(height: 24),
               const Text(
-                '一款相机工具应用。由Flutter提供底层支持',
+                '一款相机工具应用。由Dart+Flutter提供底层支持',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 16),
               ),
