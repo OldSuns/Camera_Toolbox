@@ -21,6 +21,7 @@ dependencies:
   path: ^1.9.1
   window_manager: ^0.5.1
   permission_handler: ^11.3.1
+  image: ^4.5.4
 
 dev_dependencies:
   flutter_test:

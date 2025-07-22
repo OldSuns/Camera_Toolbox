@@ -15,11 +15,13 @@ class _LocalPickerScreenState extends State<LocalPickerScreen> {
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
       create: (_) => LocalPickerProvider(),
-      child: Consumer<LocalPickerProvider>(
+      builder: (context, child) => Consumer<LocalPickerProvider>(
         builder: (context, provider, child) {
           return Scaffold(
             appBar: AppBar(
-              title: const Text('本地选片'),
+              title: provider.isLoading
+                  ? const Text('正在加载图片...')
+                  : const Text('本地选片'),
               actions: [
                 IconButton(
                   icon: const Icon(Icons.help_outline),
@@ -165,13 +167,7 @@ class _LocalPickerScreenState extends State<LocalPickerScreen> {
                 },
               ),
             ),
-            child: Image.file(
-              image,
-              fit: BoxFit.cover,
-              errorBuilder: (context, error, stackTrace) {
-                return const Center(child: Icon(Icons.error));
-              },
-            ),
+            child: ThumbnailView(imagePath: image.path),
           ),
         );
       },
@@ -315,6 +311,37 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
           ],
         ),
       ),
+    );
+  }
+}
+
+class ThumbnailView extends StatelessWidget {
+  final String imagePath;
+
+  const ThumbnailView({super.key, required this.imagePath});
+
+  @override
+  Widget build(BuildContext context) {
+    // Use a Selector to only rebuild when the specific thumbnail data changes.
+    return Selector<LocalPickerProvider, Uint8List?>(
+      selector: (_, provider) => provider.getThumbnail(imagePath),
+      builder: (context, thumbnailData, child) {
+        if (thumbnailData != null) {
+          return Image.memory(
+            thumbnailData,
+            fit: BoxFit.cover,
+            gaplessPlayback: true, // Avoids flicker when image loads
+          );
+        } else {
+          // Show a placeholder while the thumbnail is generating.
+          return Container(
+            color: Colors.grey[300],
+            child: const Center(
+              child: Icon(Icons.image_outlined, color: Colors.grey),
+            ),
+          );
+        }
+      },
     );
   }
 }
