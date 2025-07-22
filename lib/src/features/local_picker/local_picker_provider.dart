@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
@@ -5,6 +6,13 @@ import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
+
+/// Data class for thumbnail generation request
+class _ThumbnailRequest {
+  final String path;
+  final int width;
+  _ThumbnailRequest(this.path, this.width);
+}
 
 /// Data class for thumbnail generation result
 class _ThumbnailResult {
@@ -19,20 +27,20 @@ void _thumbnailGenerator(SendPort sendPort) {
   sendPort.send(receivePort.sendPort);
 
   receivePort.listen((dynamic message) {
-    if (message is String) {
+    if (message is _ThumbnailRequest) {
       try {
-        final fileBytes = File(message).readAsBytesSync();
+        final fileBytes = File(message.path).readAsBytesSync();
         // Use the 'image' package for robust decoding in a background isolate.
         final image = img.decodeImage(fileBytes);
         if (image != null) {
-          final thumbnail = img.copyResize(image, width: 300);
+          final thumbnail = img.copyResize(image, width: message.width);
           final jpgBytes = img.encodeJpg(thumbnail);
           sendPort.send(
-            _ThumbnailResult(message, Uint8List.fromList(jpgBytes)),
+            _ThumbnailResult(message.path, Uint8List.fromList(jpgBytes)),
           );
         }
       } catch (e) {
-        debugPrint('Error in isolate for $message: $e');
+        debugPrint('Error in isolate for ${message.path}: $e');
       }
     }
   });
@@ -64,6 +72,7 @@ class LocalPickerProvider with ChangeNotifier {
   Isolate? _isolate;
   SendPort? _sendPort;
   final _receivePort = ReceivePort();
+  Completer<SendPort> _sendPortCompleter = Completer<SendPort>();
 
   LocalPickerProvider() {
     _initIsolate();
@@ -74,6 +83,9 @@ class LocalPickerProvider with ChangeNotifier {
     _receivePort.listen((dynamic message) {
       if (message is SendPort) {
         _sendPort = message;
+        if (!_sendPortCompleter.isCompleted) {
+          _sendPortCompleter.complete(message);
+        }
       } else if (message is _ThumbnailResult) {
         _thumbnailCache[message.path] = message.bytes;
         notifyListeners();
@@ -86,6 +98,14 @@ class LocalPickerProvider with ChangeNotifier {
     _isolate?.kill(priority: Isolate.immediate);
     _isolate = null;
     super.dispose();
+  }
+
+  Future<void> _resetIsolate() async {
+    _isolate?.kill(priority: Isolate.immediate);
+    _isolate = null;
+    _sendPort = null;
+    _sendPortCompleter = Completer<SendPort>();
+    _isolate = await Isolate.spawn(_thumbnailGenerator, _receivePort.sendPort);
   }
 
   void setLoading(bool value) {
@@ -114,6 +134,7 @@ class LocalPickerProvider with ChangeNotifier {
 
   Future<void> selectFolder() async {
     setLoading(true);
+    await _resetIsolate();
     _images.clear();
     _selectedImages.clear();
     _thumbnailCache.clear();
@@ -139,11 +160,7 @@ class LocalPickerProvider with ChangeNotifier {
         _images = imageFiles;
         notifyListeners(); // Show empty grid first
 
-        if (_sendPort != null) {
-          for (final image in _images) {
-            _sendPort!.send(image.path);
-          }
-        }
+        _regenerateThumbnails();
       }
     } catch (e) {
       debugPrint('Error selecting folder: $e');
@@ -183,9 +200,35 @@ class LocalPickerProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  void updateThumbnailSize(double size) {
+  void updateThumbnailSize(double size) async {
+    final oldSize = _thumbnailSize;
     _thumbnailSize = size;
     notifyListeners();
+
+    // If the size crosses the 200 threshold, regenerate thumbnails.
+    if ((oldSize <= 200 && size > 200) || (oldSize > 200 && size <= 200)) {
+      // When size threshold changes, clear cache and reset isolate to force regeneration.
+      _thumbnailCache.clear();
+      notifyListeners(); // Immediately reflect the cleared cache in the UI
+      await _resetIsolate();
+      _regenerateThumbnails();
+    }
+  }
+
+  Future<void> _regenerateThumbnails() async {
+    notifyListeners();
+
+    if (_sendPort == null) {
+      _sendPort = await _sendPortCompleter.future;
+    }
+
+    final width = _thumbnailSize > 200 ? 600 : 300;
+    for (final image in _images) {
+      // If the thumbnail is not in the cache, request it.
+      if (!_thumbnailCache.containsKey(image.path)) {
+        _sendPort!.send(_ThumbnailRequest(image.path, width));
+      }
+    }
   }
 
   Future<void> exportSelected(BuildContext context) async {
