@@ -15,56 +15,83 @@ class _LocalPickerScreenState extends State<LocalPickerScreen> {
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
       create: (_) => LocalPickerProvider(),
-      builder: (context, child) => Consumer<LocalPickerProvider>(
-        builder: (context, provider, child) {
-          return Scaffold(
-            appBar: AppBar(
-              title: provider.isLoading
-                  ? const Text('正在加载图片...')
-                  : const Text('本地选片'),
-              actions: [
-                IconButton(
-                  icon: const Icon(Icons.help_outline),
-                  onPressed: _showHelpDialog,
-                ),
-              ],
+      child: Scaffold(
+        appBar: AppBar(
+          title: Selector<LocalPickerProvider, bool>(
+            selector: (_, provider) => provider.isLoading,
+            builder: (_, isLoading, __) =>
+                Text(isLoading ? '正在加载图片...' : '本地选片'),
+          ),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.help_outline),
+              onPressed: () => _showHelpDialog(context),
             ),
-            body: Column(
-              children: [
-                _buildTopBar(context, provider),
-                if (provider.isExporting)
-                  Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
+          ],
+        ),
+        body: Column(
+          children: [
+            Consumer<LocalPickerProvider>(
+              builder: (context, provider, _) =>
+                  _buildTopBar(context, provider),
+            ),
+            Selector<LocalPickerProvider, bool>(
+              selector: (_, provider) => provider.isExporting,
+              builder: (context, isExporting, _) {
+                if (!isExporting) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Selector<LocalPickerProvider, double>(
+                    selector: (_, provider) => provider.exportProgress,
+                    builder: (context, exportProgress, _) => Column(
                       children: [
-                        LinearProgressIndicator(value: provider.exportProgress),
+                        LinearProgressIndicator(value: exportProgress),
                         const SizedBox(height: 8),
                         Text(
-                          '导出中... ${(provider.exportProgress * 100).toStringAsFixed(0)}%',
+                          '导出中... ${(exportProgress * 100).toStringAsFixed(0)}%',
                         ),
                       ],
                     ),
                   ),
-                Expanded(
-                  child: provider.isLoading
-                      ? const Center(child: CircularProgressIndicator())
-                      : provider.images.isEmpty
-                      ? const Center(child: Text('请选择一个包含.jpg图片的文件夹'))
-                      : _buildImageGrid(context, provider),
-                ),
-                _buildBottomBar(context, provider),
-              ],
+                );
+              },
             ),
-          );
-        },
+            Expanded(
+              child: Selector<LocalPickerProvider, bool>(
+                selector: (_, provider) => provider.isLoading,
+                builder: (context, isLoading, child) {
+                  if (isLoading) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  return Selector<LocalPickerProvider, bool>(
+                    selector: (_, provider) => provider.images.isEmpty,
+                    builder: (context, isEmpty, _) {
+                      if (isEmpty) {
+                        return const Center(child: Text('请选择一个包含.jpg图片的文件夹'));
+                      }
+                      return Consumer<LocalPickerProvider>(
+                        builder: (context, provider, _) =>
+                            _buildImageGrid(context, provider),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+            Consumer<LocalPickerProvider>(
+              builder: (context, provider, _) =>
+                  _buildBottomBar(context, provider),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  void _showHelpDialog() {
+  void _showHelpDialog(BuildContext context) {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('本地选片帮助'),
         content: const SingleChildScrollView(
           child: Text(

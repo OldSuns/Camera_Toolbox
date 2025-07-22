@@ -42,11 +42,18 @@ class QuickSplitService {
       throw NoMatchingRawFilesException();
     }
 
-    // 创建输出目录
+    // 创建输出目录并预加载现有文件名
+    final outputDir = Directory(outputDirectory);
+    final existingFiles = <String>{};
     try {
-      final outputDir = Directory(outputDirectory);
       if (!await outputDir.exists()) {
         await outputDir.create(recursive: true);
+      } else {
+        await for (final entity in outputDir.list(recursive: false)) {
+          if (entity is File) {
+            existingFiles.add(path.basename(entity.path));
+          }
+        }
       }
     } catch (e) {
       throw OutputDirectoryCreationException(outputDirectory);
@@ -61,28 +68,47 @@ class QuickSplitService {
       final fileName = path.basename(match.rawPath);
       final destPath = path.join(outputDirectory, fileName);
 
-      // 验证源RAW文件在复制前仍然存在
-      final rawFile = File(match.rawPath);
-      final rawExists = await rawFile.exists();
-
-      if (!rawExists) {
-        throw SourceFileNotFoundException(match.rawPath);
-      }
+      // 移除循环内的存在性检查，因为_matchRawFiles已经处理
+      // final rawFile = File(match.rawPath);
+      // final rawExists = await rawFile.exists();
+      // if (!rawExists) {
+      //   throw SourceFileNotFoundException(match.rawPath);
+      // }
 
       // 处理文件冲突
       final finalDestPath = await _handleFileConflict(
         destPath,
         conflictAction,
         match.rawPath,
+        existingFiles, // 传递预加载的文件名集合
       );
 
       if (finalDestPath.isNotEmpty) {
+        // 如果是覆盖操作，先删除已存在的文件
+        if (conflictAction == ConflictAction.overwrite &&
+            await File(finalDestPath).exists()) {
+          try {
+            await File(finalDestPath).delete();
+          } catch (e) {
+            throw FileCopyException(
+              match.rawPath,
+              finalDestPath,
+              '删除已存在文件失败: $e',
+            );
+          }
+        }
+
         await _copyFileWithProgress(match.rawPath, finalDestPath, (
           copied,
           total,
         ) {
           // 这里可以添加单个文件的进度
         });
+        // 如果是重命名，需要将新文件名添加到集合中
+        if (conflictAction == ConflictAction.rename &&
+            !existingFiles.contains(path.basename(finalDestPath))) {
+          existingFiles.add(path.basename(finalDestPath));
+        }
       }
 
       processed++;
@@ -171,11 +197,11 @@ class QuickSplitService {
   Future<String> _handleFileConflict(
     String destPath,
     ConflictAction action,
-    String sourcePath, // 添加sourcePath参数
+    String sourcePath,
+    Set<String> existingFileNames, // 接收预加载的文件名集合
   ) async {
-    final file = File(destPath);
-    await file.parent.create(recursive: true);
-    final exists = await file.exists();
+    final fileName = path.basename(destPath);
+    final exists = existingFileNames.contains(fileName);
 
     if (!exists) {
       return destPath;
@@ -183,25 +209,7 @@ class QuickSplitService {
 
     switch (action) {
       case ConflictAction.overwrite:
-        try {
-          // 使用递归删除确保文件被完全删除
-          if (await file.exists()) {
-            await file.delete(recursive: true);
-          }
-
-          // 等待一小段时间确保文件系统完成删除操作
-          await Future.delayed(Duration(milliseconds: 10));
-
-          // 验证文件确实被删除
-          if (await file.exists()) {
-            throw Exception('无法删除文件: $destPath');
-          }
-
-          return destPath;
-        } catch (e) {
-          // 修复：使用正确的sourcePath而不是空字符串
-          throw FileCopyException(sourcePath, destPath, '删除已存在文件失败: $e');
-        }
+        return destPath;
 
       case ConflictAction.skip:
         return '';
@@ -212,13 +220,13 @@ class QuickSplitService {
         final ext = path.extension(destPath);
 
         int counter = 1;
-        String newPath;
+        String newFileName;
         do {
-          newPath = path.join(dir, '${name}_$counter$ext');
+          newFileName = '${name}_$counter$ext';
           counter++;
-        } while (await File(newPath).exists());
+        } while (existingFileNames.contains(newFileName));
 
-        return newPath;
+        return path.join(dir, newFileName);
     }
   }
 

@@ -141,27 +141,34 @@ class LocalPickerProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      String? selectedDirectory = await FilePicker.platform.getDirectoryPath();
-      if (selectedDirectory != null) {
-        final dir = Directory(selectedDirectory);
-        final imageFiles = dir
-            .listSync()
-            .whereType<File>()
-            .where(
-              (file) => [
-                '.jpg',
-                '.jpeg',
-                '.png',
-                '.heic',
-              ].contains(p.extension(file.path).toLowerCase()),
-            )
-            .toList();
+      final selectedDirectory = await FilePicker.platform.getDirectoryPath();
+      if (selectedDirectory == null) return;
 
-        _images = imageFiles;
-        notifyListeners(); // Show empty grid first
+      final dir = Directory(selectedDirectory);
+      final List<File> imageFiles = [];
+      final completer = Completer<void>();
 
-        _regenerateThumbnails();
-      }
+      dir.list().listen(
+        (fileSystemEntity) {
+          if (fileSystemEntity is File) {
+            final extension = p.extension(fileSystemEntity.path).toLowerCase();
+            if (['.jpg', '.jpeg', '.png', '.heic'].contains(extension)) {
+              imageFiles.add(fileSystemEntity);
+            }
+          }
+        },
+        onDone: () {
+          _images = imageFiles;
+          completer.complete();
+        },
+        onError: (e) {
+          debugPrint('Error listing files: $e');
+          completer.completeError(e);
+        },
+      );
+
+      await completer.future;
+      _regenerateThumbnails();
     } catch (e) {
       debugPrint('Error selecting folder: $e');
     } finally {
@@ -216,19 +223,15 @@ class LocalPickerProvider with ChangeNotifier {
   }
 
   Future<void> _regenerateThumbnails() async {
-    notifyListeners();
-
-    if (_sendPort == null) {
-      _sendPort = await _sendPortCompleter.future;
-    }
+    _sendPort ??= await _sendPortCompleter.future;
 
     final width = _thumbnailSize > 200 ? 600 : 300;
     for (final image in _images) {
-      // If the thumbnail is not in the cache, request it.
       if (!_thumbnailCache.containsKey(image.path)) {
         _sendPort!.send(_ThumbnailRequest(image.path, width));
       }
     }
+    notifyListeners();
   }
 
   Future<void> exportSelected(BuildContext context) async {
@@ -254,7 +257,10 @@ class LocalPickerProvider with ChangeNotifier {
           await imageFile.copy(newPath);
           i++;
           _exportProgress = i / _selectedImages.length;
-          notifyListeners();
+          // Only notify listeners for progress, not for every file
+          if (i % 5 == 0 || i == _selectedImages.length) {
+            notifyListeners();
+          }
         }
 
         scaffoldMessenger.showSnackBar(
