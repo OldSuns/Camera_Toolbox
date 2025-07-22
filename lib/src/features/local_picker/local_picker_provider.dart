@@ -54,6 +54,9 @@ class LocalPickerProvider with ChangeNotifier {
   final Set<File> _selectedImages = {};
   Set<File> get selectedImages => _selectedImages;
 
+  final Map<String, bool> _rawFileStatus = {};
+  Map<String, bool> get rawFileStatus => _rawFileStatus;
+
   double _thumbnailSize = 150.0;
   double get thumbnailSize => _thumbnailSize;
 
@@ -115,12 +118,14 @@ class LocalPickerProvider with ChangeNotifier {
 
   void setCurrentImageIndex(int index) {
     _currentImageIndex = index;
+    checkRawFileForCurrentImage();
     notifyListeners();
   }
 
   void nextImage() {
     if (_currentImageIndex < _images.length - 1) {
       _currentImageIndex++;
+      checkRawFileForCurrentImage();
       notifyListeners();
     }
   }
@@ -128,6 +133,7 @@ class LocalPickerProvider with ChangeNotifier {
   void previousImage() {
     if (_currentImageIndex > 0) {
       _currentImageIndex--;
+      checkRawFileForCurrentImage();
       notifyListeners();
     }
   }
@@ -273,5 +279,62 @@ class LocalPickerProvider with ChangeNotifier {
       _isExporting = false;
       notifyListeners();
     }
+  }
+
+  Future<void> checkRawFileForCurrentImage() async {
+    if (_images.isEmpty) return;
+    final currentImage = _images[_currentImageIndex];
+    if (_rawFileStatus.containsKey(currentImage.path)) return;
+
+    const rawExtensions = [
+      // Canon
+      '.CR2', '.CR3',
+      // Nikon
+      '.NEF',
+      // Sony
+      '.ARW',
+      // Adobe
+      '.DNG',
+      // Fujifilm
+      '.RAF',
+      // Panasonic
+      '.RW2',
+      // Olympus
+      '.ORF',
+      // Pentax
+      '.PEF',
+      // Samsung
+      '.SRW',
+      // GoPro
+      '.GPR',
+      // Hasselblad
+      '.3FR', '.FFF',
+      // Kodak
+      '.DCR', '.KDC',
+      // Minolta
+      '.MRW',
+      // Leaf
+      '.MOS',
+      // Sigma
+      '.X3F',
+    ];
+    final fileDirectory = p.dirname(currentImage.path);
+    final fileNameWithoutExtension = p.basenameWithoutExtension(
+      currentImage.path,
+    );
+
+    for (final ext in rawExtensions) {
+      final rawFilePath = p.join(
+        fileDirectory,
+        '$fileNameWithoutExtension$ext',
+      );
+      if (await File(rawFilePath).exists()) {
+        _rawFileStatus[currentImage.path] = true;
+        notifyListeners();
+        return;
+      }
+    }
+    _rawFileStatus[currentImage.path] = false;
+    notifyListeners();
   }
 }

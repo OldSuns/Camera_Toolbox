@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'dart:io';
+import 'package:path/path.dart' as p;
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'local_picker_provider.dart';
@@ -125,34 +127,59 @@ class _LocalPickerScreenState extends State<LocalPickerScreen> {
   Widget _buildTopBar(BuildContext context, LocalPickerProvider provider) {
     return Padding(
       padding: const EdgeInsets.all(16.0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          ElevatedButton.icon(
-            onPressed: () => provider.selectFolder(),
-            icon: const Icon(Icons.folder_open),
-            label: const Text('选择文件夹'),
-          ),
-          if (provider.images.isNotEmpty)
-            Row(
-              children: [
-                TextButton(
-                  onPressed: provider.selectAll,
-                  child: const Text('全选'),
-                ),
-                const SizedBox(width: 8),
-                TextButton(
-                  onPressed: provider.deselectAll,
-                  child: const Text('全不选'),
-                ),
-                const SizedBox(width: 8),
-                TextButton(
-                  onPressed: provider.invertSelection,
-                  child: const Text('反选'),
-                ),
-              ],
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final buttonGroup = [
+            TextButton(onPressed: provider.selectAll, child: const Text('全选')),
+            TextButton(
+              onPressed: provider.deselectAll,
+              child: const Text('全不选'),
             ),
-        ],
+            TextButton(
+              onPressed: provider.invertSelection,
+              child: const Text('反选'),
+            ),
+          ];
+
+          // Estimate the width of the buttons
+          const double selectFolderWidth = 150;
+          const double buttonGroupWidth = 240; // 80 per button * 3
+          const double spacing = 16;
+
+          if (constraints.maxWidth <
+              selectFolderWidth + buttonGroupWidth + spacing) {
+            // Use a column layout if space is tight
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                ElevatedButton.icon(
+                  onPressed: () => provider.selectFolder(),
+                  icon: const Icon(Icons.folder_open),
+                  label: const Text('选择文件夹'),
+                ),
+                if (provider.images.isNotEmpty)
+                  Wrap(
+                    spacing: 8.0,
+                    alignment: WrapAlignment.center,
+                    children: buttonGroup,
+                  ),
+              ],
+            );
+          } else {
+            // Use a row layout if there's enough space
+            return Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                ElevatedButton.icon(
+                  onPressed: () => provider.selectFolder(),
+                  icon: const Icon(Icons.folder_open),
+                  label: const Text('选择文件夹'),
+                ),
+                if (provider.images.isNotEmpty) Row(children: buttonGroup),
+              ],
+            );
+          }
+        },
       ),
     );
   }
@@ -170,31 +197,34 @@ class _LocalPickerScreenState extends State<LocalPickerScreen> {
         final image = provider.images[index];
         final isSelected = provider.selectedImages.contains(image);
 
-        return GestureDetector(
-          onTap: () {
-            provider.setCurrentImageIndex(index);
-            showDialog(
-              context: context,
-              barrierColor: Colors.black.withAlpha((255 * 0.8).round()),
-              builder: (BuildContext dialogContext) {
-                return ChangeNotifierProvider.value(
-                  value: provider,
-                  child: const ImageViewerDialog(),
-                );
-              },
-            );
-          },
-          child: GridTile(
-            header: Align(
-              alignment: Alignment.topRight,
-              child: Checkbox(
-                value: isSelected,
-                onChanged: (bool? value) {
-                  provider.toggleSelection(image);
+        return Tooltip(
+          message: p.basename(image.path),
+          child: GestureDetector(
+            onTap: () {
+              provider.setCurrentImageIndex(index);
+              showDialog(
+                context: context,
+                barrierColor: Colors.black.withAlpha((255 * 0.8).round()),
+                builder: (BuildContext dialogContext) {
+                  return ChangeNotifierProvider.value(
+                    value: provider,
+                    child: const ImageViewerDialog(),
+                  );
                 },
+              );
+            },
+            child: GridTile(
+              header: Align(
+                alignment: Alignment.topRight,
+                child: Checkbox(
+                  value: isSelected,
+                  onChanged: (bool? value) {
+                    provider.toggleSelection(image);
+                  },
+                ),
               ),
+              child: ThumbnailView(imagePath: image.path),
             ),
-            child: ThumbnailView(imagePath: image.path),
           ),
         );
       },
@@ -206,29 +236,43 @@ class _LocalPickerScreenState extends State<LocalPickerScreen> {
       padding: const EdgeInsets.all(16.0),
       child: Row(
         children: [
-          Text(
-            '选中 ${provider.selectedImages.length} / ${provider.images.length} 张',
-          ),
-          const Spacer(),
-          SizedBox(
-            width: 200,
-            child: Slider(
-              value: provider.thumbnailSize,
-              min: 50.0,
-              max: 300.0,
-              divisions: 5,
-              label: provider.thumbnailSize.round().toString(),
-              onChanged: (double value) {
-                provider.updateThumbnailSize(value);
-              },
+          Expanded(
+            child: Wrap(
+              spacing: 16.0,
+              runSpacing: 8.0,
+              alignment: WrapAlignment.end,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text(
+                  '选中 ${provider.selectedImages.length} / ${provider.images.length} 张',
+                ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('缩略图:'),
+                    SizedBox(
+                      width: 150,
+                      child: Slider(
+                        value: provider.thumbnailSize,
+                        min: 50.0,
+                        max: 300.0,
+                        divisions: 5,
+                        label: provider.thumbnailSize.round().toString(),
+                        onChanged: (double value) {
+                          provider.updateThumbnailSize(value);
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                ElevatedButton(
+                  onPressed: provider.isExporting
+                      ? null
+                      : () => provider.exportSelected(context),
+                  child: const Text('导出'),
+                ),
+              ],
             ),
-          ),
-          const SizedBox(width: 24),
-          ElevatedButton(
-            onPressed: provider.isExporting
-                ? null
-                : () => provider.exportSelected(context),
-            child: const Text('导出'),
           ),
         ],
       ),
@@ -250,6 +294,11 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
   void initState() {
     super.initState();
     _focusNode.requestFocus();
+    // Trigger the check when the dialog is first shown.
+    Provider.of<LocalPickerProvider>(
+      context,
+      listen: false,
+    ).checkRawFileForCurrentImage();
   }
 
   @override
@@ -277,6 +326,7 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
     final provider = Provider.of<LocalPickerProvider>(context);
     final image = provider.images[provider.currentImageIndex];
     final isSelected = provider.selectedImages.contains(image);
+    final hasRaw = provider.rawFileStatus[image.path] ?? false;
 
     return KeyboardListener(
       focusNode: _focusNode,
@@ -292,6 +342,40 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
               minScale: 0.5,
               maxScale: 4,
               child: Image.file(image, fit: BoxFit.contain),
+            ),
+            Positioned(
+              top: 10,
+              left: 10,
+              child: Material(
+                color: Colors.black.withAlpha((255 * 0.5).round()),
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8.0,
+                    vertical: 4.0,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        p.basename(image.path),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                        ),
+                      ),
+                      if (hasRaw)
+                        const Text(
+                          '存在 RAW 文件',
+                          style: TextStyle(
+                            color: Colors.greenAccent,
+                            fontSize: 14,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
             ),
             Positioned(
               top: 10,
