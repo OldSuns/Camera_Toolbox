@@ -54,7 +54,7 @@ class _LocalPickerViewState extends State<_LocalPickerView> {
       appBar: AppBar(
         title: Selector<LocalPickerProvider, bool>(
           selector: (_, provider) => provider.isLoading,
-          builder: (_, isLoading, __) => Text(
+          builder: (_, isLoading, _) => Text(
             isLoading && context.read<LocalPickerProvider>().imagePaths.isEmpty
                 ? '正在加载图片...'
                 : '本地选片',

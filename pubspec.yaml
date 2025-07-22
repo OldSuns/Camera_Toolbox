@@ -11,7 +11,7 @@ dependencies:
     sdk: flutter
   exif_reader: ^3.16.1
   image_picker: ^1.0.7
-  file_picker: ^8.0.5
+  file_picker: ^10.2.0
   path_provider: ^2.1.2
   intl: ^0.20.2
   flutter_localizations:
@@ -20,14 +20,14 @@ dependencies:
   shared_preferences: ^2.2.2
   path: ^1.9.1
   window_manager: ^0.5.1
-  permission_handler: ^11.3.1
+  permission_handler: ^12.0.1
   image: ^4.5.4
   crypto: ^3.0.3
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^5.0.0
+  flutter_lints: ^6.0.0
 
 flutter:
   uses-material-design: true
