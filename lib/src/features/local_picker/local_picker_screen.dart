@@ -1,90 +1,117 @@
+import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'local_picker_provider.dart';
 
-class LocalPickerScreen extends StatefulWidget {
+class LocalPickerScreen extends StatelessWidget {
   const LocalPickerScreen({super.key});
 
-  @override
-  State<LocalPickerScreen> createState() => _LocalPickerScreenState();
-}
-
-class _LocalPickerScreenState extends State<LocalPickerScreen> {
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
       create: (_) => LocalPickerProvider(),
-      child: Scaffold(
-        appBar: AppBar(
-          title: Selector<LocalPickerProvider, bool>(
-            selector: (_, provider) => provider.isLoading,
-            builder: (_, isLoading, __) =>
-                Text(isLoading ? '正在加载图片...' : '本地选片'),
+      child: const _LocalPickerView(),
+    );
+  }
+}
+
+class _LocalPickerView extends StatefulWidget {
+  const _LocalPickerView({Key? key}) : super(key: key);
+
+  @override
+  State<_LocalPickerView> createState() => _LocalPickerViewState();
+}
+
+class _LocalPickerViewState extends State<_LocalPickerView> {
+  final _scrollController = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    // Use addPostFrameCallback to ensure provider is available.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final provider = Provider.of<LocalPickerProvider>(context, listen: false);
+      _scrollController.addListener(() {
+        if (_scrollController.position.pixels >=
+            _scrollController.position.maxScrollExtent - 200) {
+          provider.loadMoreImages();
+        }
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Selector<LocalPickerProvider, bool>(
+          selector: (_, provider) => provider.isLoading,
+          builder: (_, isLoading, __) => Text(
+            isLoading && context.read<LocalPickerProvider>().imagePaths.isEmpty
+                ? '正在加载图片...'
+                : '本地选片',
           ),
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.help_outline),
-              onPressed: () => _showHelpDialog(context),
-            ),
-          ],
         ),
-        body: Column(
-          children: [
-            Consumer<LocalPickerProvider>(
-              builder: (context, provider, _) =>
-                  _buildTopBar(context, provider),
-            ),
-            Selector<LocalPickerProvider, bool>(
-              selector: (_, provider) => provider.isExporting,
-              builder: (context, isExporting, _) {
-                if (!isExporting) return const SizedBox.shrink();
-                return Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Selector<LocalPickerProvider, double>(
-                    selector: (_, provider) => provider.exportProgress,
-                    builder: (context, exportProgress, _) => Column(
-                      children: [
-                        LinearProgressIndicator(value: exportProgress),
-                        const SizedBox(height: 8),
-                        Text(
-                          '导出中... ${(exportProgress * 100).toStringAsFixed(0)}%',
-                        ),
-                      ],
-                    ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.help_outline),
+            onPressed: () => _showHelpDialog(context),
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Consumer<LocalPickerProvider>(
+            builder: (context, provider, _) => _buildTopBar(context, provider),
+          ),
+          Selector<LocalPickerProvider, bool>(
+            selector: (_, provider) => provider.isExporting,
+            builder: (context, isExporting, _) {
+              if (!isExporting) return const SizedBox.shrink();
+              return Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Selector<LocalPickerProvider, double>(
+                  selector: (_, provider) => provider.exportProgress,
+                  builder: (context, exportProgress, _) => Column(
+                    children: [
+                      LinearProgressIndicator(value: exportProgress),
+                      const SizedBox(height: 8),
+                      Text(
+                        '导出中... ${(exportProgress * 100).toStringAsFixed(0)}%',
+                      ),
+                    ],
                   ),
-                );
+                ),
+              );
+            },
+          ),
+          Expanded(
+            child: Consumer<LocalPickerProvider>(
+              builder: (context, provider, child) {
+                if (provider.isLoading && provider.imagePaths.isEmpty) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (provider.imagePaths.isEmpty) {
+                  return const Center(child: Text('请选择一个包含.jpg图片的文件夹'));
+                }
+                return _buildImageGrid(context, provider);
               },
             ),
-            Expanded(
-              child: Selector<LocalPickerProvider, bool>(
-                selector: (_, provider) => provider.isLoading,
-                builder: (context, isLoading, child) {
-                  if (isLoading) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-                  return Selector<LocalPickerProvider, bool>(
-                    selector: (_, provider) => provider.images.isEmpty,
-                    builder: (context, isEmpty, _) {
-                      if (isEmpty) {
-                        return const Center(child: Text('请选择一个包含.jpg图片的文件夹'));
-                      }
-                      return Consumer<LocalPickerProvider>(
-                        builder: (context, provider, _) =>
-                            _buildImageGrid(context, provider),
-                      );
-                    },
-                  );
-                },
-              ),
-            ),
-            Consumer<LocalPickerProvider>(
-              builder: (context, provider, _) =>
-                  _buildBottomBar(context, provider),
-            ),
-          ],
-        ),
+          ),
+          Consumer<LocalPickerProvider>(
+            builder: (context, provider, _) =>
+                _buildBottomBar(context, provider),
+          ),
+        ],
       ),
     );
   }
@@ -157,7 +184,7 @@ class _LocalPickerScreenState extends State<LocalPickerScreen> {
                   icon: const Icon(Icons.folder_open),
                   label: const Text('选择文件夹'),
                 ),
-                if (provider.images.isNotEmpty)
+                if (provider.imagePaths.isNotEmpty)
                   Wrap(
                     spacing: 8.0,
                     alignment: WrapAlignment.center,
@@ -175,7 +202,7 @@ class _LocalPickerScreenState extends State<LocalPickerScreen> {
                   icon: const Icon(Icons.folder_open),
                   label: const Text('选择文件夹'),
                 ),
-                if (provider.images.isNotEmpty) Row(children: buttonGroup),
+                if (provider.imagePaths.isNotEmpty) Row(children: buttonGroup),
               ],
             );
           }
@@ -186,19 +213,25 @@ class _LocalPickerScreenState extends State<LocalPickerScreen> {
 
   Widget _buildImageGrid(BuildContext context, LocalPickerProvider provider) {
     return GridView.builder(
+      controller: _scrollController,
       padding: const EdgeInsets.all(8.0),
       gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
         maxCrossAxisExtent: provider.thumbnailSize,
         mainAxisSpacing: 8.0,
         crossAxisSpacing: 8.0,
       ),
-      itemCount: provider.images.length,
+      itemCount: provider.imagePaths.length + (provider.hasMore ? 1 : 0),
       itemBuilder: (context, index) {
-        final image = provider.images[index];
-        final isSelected = provider.selectedImages.contains(image);
+        if (index >= provider.imagePaths.length) {
+          // This is the indicator at the end of the list.
+          // The actual loading is triggered by the scroll controller.
+          return const Center(child: CircularProgressIndicator());
+        }
+        final imagePath = provider.imagePaths[index];
+        final isSelected = provider.selectedImagePaths.contains(imagePath);
 
         return Tooltip(
-          message: p.basename(image.path),
+          message: p.basename(imagePath),
           child: GestureDetector(
             onTap: () {
               provider.setCurrentImageIndex(index);
@@ -206,6 +239,7 @@ class _LocalPickerScreenState extends State<LocalPickerScreen> {
                 context: context,
                 barrierColor: Colors.black.withAlpha((255 * 0.8).round()),
                 builder: (BuildContext dialogContext) {
+                  // Use the existing provider instance for the dialog.
                   return ChangeNotifierProvider.value(
                     value: provider,
                     child: const ImageViewerDialog(),
@@ -219,11 +253,11 @@ class _LocalPickerScreenState extends State<LocalPickerScreen> {
                 child: Checkbox(
                   value: isSelected,
                   onChanged: (bool? value) {
-                    provider.toggleSelection(image);
+                    provider.toggleSelection(imagePath);
                   },
                 ),
               ),
-              child: ThumbnailView(imagePath: image.path),
+              child: ThumbnailView(imagePath: imagePath),
             ),
           ),
         );
@@ -244,7 +278,7 @@ class _LocalPickerScreenState extends State<LocalPickerScreen> {
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Text(
-                  '选中 ${provider.selectedImages.length} / ${provider.images.length} 张',
+                  '选中 ${provider.selectedImagePaths.length} / ${provider.totalImageCount} 张',
                 ),
                 Row(
                   mainAxisSize: MainAxisSize.min,
@@ -325,8 +359,9 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
           curve: Curves.easeInOut,
         );
       } else if (event.logicalKey == LogicalKeyboardKey.keyF) {
-        final currentImage = provider.images[provider.currentImageIndex];
-        provider.toggleSelection(currentImage);
+        final currentImagePath =
+            provider.imagePaths[provider.currentImageIndex];
+        provider.toggleSelection(currentImagePath);
       }
     }
   }
@@ -334,9 +369,9 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
   @override
   Widget build(BuildContext context) {
     final provider = Provider.of<LocalPickerProvider>(context);
-    final image = provider.images[provider.currentImageIndex];
-    final isSelected = provider.selectedImages.contains(image);
-    final hasRaw = provider.rawFileStatus[image.path] ?? false;
+    final imagePath = provider.imagePaths[provider.currentImageIndex];
+    final isSelected = provider.selectedImagePaths.contains(imagePath);
+    final hasRaw = provider.rawFileStatus[imagePath] ?? false;
 
     return KeyboardListener(
       focusNode: _focusNode,
@@ -348,7 +383,7 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
           children: [
             PageView.builder(
               controller: _pageController,
-              itemCount: provider.images.length,
+              itemCount: provider.imagePaths.length,
               onPageChanged: (index) {
                 provider.setCurrentImageIndex(index);
                 // Precache images when page changes
@@ -361,7 +396,7 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
                   minScale: 0.5,
                   maxScale: 4,
                   child: Image.file(
-                    provider.images[index],
+                    File(provider.imagePaths[index]),
                     fit: BoxFit.contain,
                   ),
                 );
@@ -382,7 +417,7 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        p.basename(image.path),
+                        p.basename(imagePath),
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 16,
@@ -414,7 +449,7 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
                       child: Checkbox(
                         value: isSelected,
                         onChanged: (bool? value) {
-                          provider.toggleSelection(image);
+                          provider.toggleSelection(imagePath);
                         },
                         activeColor: Colors.white,
                         checkColor: Colors.blue,
@@ -456,32 +491,63 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
   }
 }
 
-class ThumbnailView extends StatelessWidget {
+class ThumbnailView extends StatefulWidget {
   final String imagePath;
 
   const ThumbnailView({super.key, required this.imagePath});
 
   @override
+  State<ThumbnailView> createState() => _ThumbnailViewState();
+}
+
+class _ThumbnailViewState extends State<ThumbnailView> {
+  Future<Uint8List?>? _thumbnailFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    // It's important to call this only once.
+    _thumbnailFuture = Provider.of<LocalPickerProvider>(
+      context,
+      listen: false,
+    ).getThumbnail(widget.imagePath);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    // Use a Selector to only rebuild when the specific thumbnail data changes.
-    return Selector<LocalPickerProvider, Uint8List?>(
-      selector: (_, provider) => provider.getThumbnail(imagePath),
-      builder: (context, thumbnailData, child) {
-        if (thumbnailData != null) {
+    // Listen to provider changes to get updates when a new thumbnail is generated
+    // and added to the memory cache.
+    final cachedThumbnail = context
+        .watch<LocalPickerProvider>()
+        .thumbnailCache[widget.imagePath];
+
+    if (cachedThumbnail != null) {
+      return Image.memory(
+        cachedThumbnail,
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+      );
+    }
+
+    return FutureBuilder<Uint8List?>(
+      future: _thumbnailFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.done &&
+            snapshot.hasData &&
+            snapshot.data != null) {
           return Image.memory(
-            thumbnailData,
+            snapshot.data!,
             fit: BoxFit.cover,
-            gaplessPlayback: true, // Avoids flicker when image loads
-          );
-        } else {
-          // Show a placeholder while the thumbnail is generating.
-          return Container(
-            color: Colors.grey[300],
-            child: const Center(
-              child: Icon(Icons.image_outlined, color: Colors.grey),
-            ),
+            gaplessPlayback: true,
           );
         }
+        // Show a placeholder while loading from disk or generating.
+        return Container(
+          color: Colors.grey[300],
+          child: const Center(
+            child: Icon(Icons.image_outlined, color: Colors.grey),
+          ),
+        );
       },
     );
   }

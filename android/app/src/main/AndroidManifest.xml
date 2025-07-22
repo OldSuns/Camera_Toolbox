@@ -1,5 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.oldsun.cameratoolbox">
+    package="com.oldsun.camera_toolbox">
     <!-- Required for reading files from external storage -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <!-- Required for reading images on Android 13 (API 33) and above -->

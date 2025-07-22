@@ -6,6 +6,7 @@ import 'package:window_manager/window_manager.dart';
 import 'src/shared/providers/theme_provider.dart';
 import 'src/shared/providers/navigation_provider.dart';
 import 'src/features/home/home_screen.dart';
+import 'src/features/local_picker/local_picker_provider.dart';
 
 /// 应用程序的主入口点。
 void main() async {
@@ -50,8 +51,46 @@ void main() async {
 }
 
 /// 应用程序的根小部件。
-class CameraToolboxApp extends StatelessWidget {
+class CameraToolboxApp extends StatefulWidget {
   const CameraToolboxApp({super.key});
+
+  @override
+  State<CameraToolboxApp> createState() => _CameraToolboxAppState();
+}
+
+class _CameraToolboxAppState extends State<CameraToolboxApp>
+    with WindowListener {
+  @override
+  void initState() {
+    super.initState();
+    windowManager.addListener(this);
+    _configureWindowCloseHandler();
+  }
+
+  @override
+  void dispose() {
+    windowManager.removeListener(this);
+    super.dispose();
+  }
+
+  void _configureWindowCloseHandler() async {
+    // 拦截默认的关闭行为
+    await windowManager.setPreventClose(true);
+  }
+
+  @override
+  @override
+  Future<void> onWindowClose() async {
+    // 1. 立即隐藏窗口，给用户即时反馈
+    await windowManager.hide();
+    try {
+      // 2. 等待缓存清理完成。因为窗口已隐藏，用户不会感到延迟。
+      await LocalPickerProvider.clearCache();
+    } finally {
+      // 3. 清理完成后，安全地销毁窗口/进程。
+      await windowManager.destroy();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
