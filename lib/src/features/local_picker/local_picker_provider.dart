@@ -138,6 +138,20 @@ class LocalPickerProvider with ChangeNotifier {
     }
   }
 
+  void precacheAdjacentImages(BuildContext context) {
+    if (_images.isEmpty) return;
+
+    // Precache the next 3 images to improve performance.
+    // The `precacheImage` function is idempotent; it won't reload an image
+    // that is already in the cache.
+    for (int i = 1; i <= 3; i++) {
+      final nextIndex = _currentImageIndex + i;
+      if (nextIndex < _images.length) {
+        precacheImage(FileImage(_images[nextIndex]), context);
+      }
+    }
+  }
+
   Future<void> selectFolder() async {
     setLoading(true);
     await _resetIsolate();

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -99,17 +98,18 @@ class _LocalPickerScreenState extends State<LocalPickerScreen> {
           child: Text(
             '本地选片功能允许您从设备的存储中选择、查看和管理照片。\n\n'
             '核心操作：\n'
-            '- 点击“选择图片”按钮从您的设备中选择一个或多个图片文件。\n'
-            '- 选择的图片会以缩略图的形式显示在下方网格中。\n'
+            '- 点击“选择文件夹”按钮，选择一个包含照片的文件夹。\n'
+            '- 所有支持的图片会以缩略图的形式显示在网格中。\n'
             '- 点击缩略图可以进入大图查看模式。\n\n'
             '大图查看模式：\n'
-            '- 支持双指缩放查看图片细节。\n'
-            '- 支持左右滑动切换图片。\n'
-            '- 底部工具栏提供“选择/取消选择”和“导出”功能。\n\n'
+            '- 支持左右滑动或使用键盘的左右方向键来切换图片。\n'
+            '- 支持双指或鼠标滚轮缩放，查看图片细节。\n'
+            '- 按下“F”键可以快速选择或取消选择当前图片。\n'
+            '- 顶部栏提供关闭和选择功能。\n\n'
             '图片管理：\n'
             '- 在缩略图网格或大图查看器中，您可以选择或取消选择图片。\n'
-            '- 选中的图片会有一个蓝色的边框和复选标记。\n'
-            '- 点击主界面的“导出选中图片”按钮，可以将所有选中的图片保存到您指定的目录中。\n\n'
+            '- 选中的图片会有一个明显的标记。\n'
+            '- 点击主界面的“导出”按钮，可以将所有选中的图片保存到您指定的目录中。\n\n'
             '支持的格式：\n'
             '- 支持常见的图片格式，如 JPG, PNG, HEIC 等。',
           ),
@@ -289,21 +289,25 @@ class ImageViewerDialog extends StatefulWidget {
 
 class _ImageViewerDialogState extends State<ImageViewerDialog> {
   final FocusNode _focusNode = FocusNode();
+  late final PageController _pageController;
 
   @override
   void initState() {
     super.initState();
     _focusNode.requestFocus();
-    // Trigger the check when the dialog is first shown.
-    Provider.of<LocalPickerProvider>(
-      context,
-      listen: false,
-    ).checkRawFileForCurrentImage();
+    final provider = Provider.of<LocalPickerProvider>(context, listen: false);
+    _pageController = PageController(initialPage: provider.currentImageIndex);
+
+    // Precache initial images
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      provider.precacheAdjacentImages(context);
+    });
   }
 
   @override
   void dispose() {
     _focusNode.dispose();
+    _pageController.dispose();
     super.dispose();
   }
 
@@ -311,9 +315,15 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
     if (event is KeyDownEvent) {
       final provider = Provider.of<LocalPickerProvider>(context, listen: false);
       if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
-        provider.previousImage();
+        _pageController.previousPage(
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeInOut,
+        );
       } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
-        provider.nextImage();
+        _pageController.nextPage(
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeInOut,
+        );
       } else if (event.logicalKey == LogicalKeyboardKey.keyF) {
         final currentImage = provider.images[provider.currentImageIndex];
         provider.toggleSelection(currentImage);
@@ -336,12 +346,26 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
         child: Stack(
           alignment: Alignment.center,
           children: [
-            InteractiveViewer(
-              panEnabled: true,
-              boundaryMargin: const EdgeInsets.all(20),
-              minScale: 0.5,
-              maxScale: 4,
-              child: Image.file(image, fit: BoxFit.contain),
+            PageView.builder(
+              controller: _pageController,
+              itemCount: provider.images.length,
+              onPageChanged: (index) {
+                provider.setCurrentImageIndex(index);
+                // Precache images when page changes
+                provider.precacheAdjacentImages(context);
+              },
+              itemBuilder: (context, index) {
+                return InteractiveViewer(
+                  panEnabled: true,
+                  boundaryMargin: const EdgeInsets.all(20),
+                  minScale: 0.5,
+                  maxScale: 4,
+                  child: Image.file(
+                    provider.images[index],
+                    fit: BoxFit.contain,
+                  ),
+                );
+              },
             ),
             Positioned(
               top: 10,
@@ -409,14 +433,20 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
               left: 10,
               child: IconButton(
                 icon: const Icon(Icons.arrow_back_ios, color: Colors.white),
-                onPressed: provider.previousImage,
+                onPressed: () => _pageController.previousPage(
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeInOut,
+                ),
               ),
             ),
             Positioned(
               right: 10,
               child: IconButton(
                 icon: const Icon(Icons.arrow_forward_ios, color: Colors.white),
-                onPressed: provider.nextImage,
+                onPressed: () => _pageController.nextPage(
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeInOut,
+                ),
               ),
             ),
           ],
