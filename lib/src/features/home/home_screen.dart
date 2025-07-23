@@ -9,6 +9,7 @@ import '../local_picker/local_picker_screen.dart';
 import '../quick_split/quick_split_screen.dart';
 import '../settings/settings_screen.dart';
 import '../about/about_screen.dart';
+import '../rename/rename_screen.dart';
 
 /// 主页面框架
 class HomeScreen extends StatefulWidget {
@@ -24,6 +25,7 @@ class _HomeScreenState extends State<HomeScreen>
     const ExifReaderScreen(),
     const LocalPickerScreen(),
     const QuickSplitScreen(),
+    const RenameScreen(),
     const SettingsScreen(),
     const AboutScreen(),
   ];

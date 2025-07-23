@@ -13,7 +13,14 @@ class NavigationProvider with ChangeNotifier {
 }
 
 /// 应用页面枚举
-enum AppPage { exifReader, localPicker, rawManager, settings, about }
+enum AppPage {
+  exifReader,
+  localPicker,
+  rawManager,
+  batchRename,
+  settings,
+  about,
+}
 
 extension AppPageExtension on AppPage {
   String get title {
@@ -24,6 +31,8 @@ extension AppPageExtension on AppPage {
         return '本地选片';
       case AppPage.rawManager:
         return '快速分片';
+      case AppPage.batchRename:
+        return '批量重命名';
       case AppPage.settings:
         return '设置';
       case AppPage.about:
@@ -39,6 +48,8 @@ extension AppPageExtension on AppPage {
         return Icons.photo_library_outlined;
       case AppPage.rawManager:
         return Icons.folder;
+      case AppPage.batchRename:
+        return Icons.text_format;
       case AppPage.settings:
         return Icons.settings;
       case AppPage.about:
