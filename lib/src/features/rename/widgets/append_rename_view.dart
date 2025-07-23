@@ -72,17 +72,12 @@ class _AppendRenameViewState extends State<AppendRenameView> {
                   },
                 ),
                 const SizedBox(height: 16),
-                const Text('追加模式'),
-                const SizedBox(height: 8),
-                CheckboxListTile(
-                  title: const Text('在文件名后追加'),
+                SwitchListTile(
+                  title: const Text('在原文件名后追加'),
                   value: provider.appendAfterFilename,
                   onChanged: (value) {
-                    if (value != null) {
-                      provider.setAppendAfterFilename(value);
-                    }
+                    provider.setAppendAfterFilename(value);
                   },
-                  controlAffinity: ListTileControlAffinity.leading,
                 ),
               ],
             ),

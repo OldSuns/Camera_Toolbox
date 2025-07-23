@@ -1,72 +1,67 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:intl/intl.dart';
 import 'package:cross_file/cross_file.dart';
 import '../exif_reader/exif_service.dart';
 import '../../shared/services/file_selector_service.dart';
 import 'replace_rule.dart';
 
 // Isolate的入口函数必须是顶层函数或静态方法
-Future<Map<String, int>> _renameWorker(Map<String, dynamic> params) async {
-  // 解包参数
+Future<Map<String, dynamic>> _renameWorker(Map<String, dynamic> params) async {
+  // 解包文件列表以进行迭代
   final filesData = params['files'] as List<Map<String, dynamic>>;
   final files = filesData.map((data) => FileDetail.fromJson(data)).toList();
-  final activeTabIndex = params['activeTabIndex'] as int;
-  final replaceRules = (params['replaceRules'] as List<Map<String, dynamic>>)
-      .map((r) => ReplaceRule.fromJson(r))
-      .toList();
-  final appendPrefix = params['appendPrefix'] as String;
-  final appendSuffix = params['appendSuffix'] as String;
-  final appendAfterFilename = params['appendAfterFilename'] as bool;
-  final numberingPrefix = params['numberingPrefix'] as String;
-  final numberingSuffix = params['numberingSuffix'] as String;
-  final startNumber = params['startNumber'] as int;
-  final numberingType = params['numberingType'] as NumberingType;
-  final fixedDigits = params['fixedDigits'] as int;
-  final keepOriginalName = params['keepOriginalName'] as bool;
-  final mergeSameName = params['mergeSameName'] as bool;
-  final exifTemplate = params['exifTemplate'] as String;
-  final exifCache = params['exifCache'] as Map<String, Map<String, dynamic>>;
 
   int successCount = 0;
   int failedCount = 0;
-
-  final provider = RenameProvider._internal();
-  provider._files.addAll(files);
-  provider._activeTabIndex = activeTabIndex;
-  provider._replaceRules.clear();
-  provider._replaceRules.addAll(replaceRules);
-  provider._appendPrefix = appendPrefix;
-  provider._appendSuffix = appendSuffix;
-  provider._appendAfterFilename = appendAfterFilename;
-  provider._numberingPrefix = numberingPrefix;
-  provider._numberingSuffix = numberingSuffix;
-  provider._startNumber = startNumber;
-  provider._numberingType = numberingType;
-  provider._fixedDigits = fixedDigits;
-  provider._keepOriginalName = keepOriginalName;
-  provider._mergeSameName = mergeSameName;
-  provider._exifTemplate = exifTemplate;
-  provider._exifCache.addAll(exifCache);
+  final List<Map<String, String>> renameLog = [];
+  final List<Map<String, String>> failedFiles = [];
 
   for (int i = 0; i < files.length; i++) {
     final fileDetail = files[i];
     final oldPath = fileDetail.file.path;
     try {
-      final newName = provider.previewRename(fileDetail, i);
+      // 调用静态方法获取新文件名，避免创建Provider实例
+      final newName = RenameProvider._getNewNameForWorker(
+        params,
+        fileDetail,
+        i,
+        files,
+      );
       final newPath =
           '${fileDetail.file.parent.path}${Platform.pathSeparator}$newName';
 
       if (oldPath != newPath) {
+        if (await File(newPath).exists()) {
+          const error = 'File already exists';
+          debugPrint('$error: $newPath, skipping rename.');
+          failedCount++;
+          failedFiles.add({'path': oldPath, 'error': error});
+          continue;
+        }
         await fileDetail.file.rename(newPath);
+        renameLog.add({'oldPath': oldPath, 'newPath': newPath});
       }
       successCount++;
-    } catch (e) {
-      debugPrint('Failed to rename ${fileDetail.file.path}: $e');
+    } on FileSystemException catch (e) {
+      final error = e.osError?.message ?? e.message;
+      debugPrint('Failed to rename ${fileDetail.file.path}: $error');
       failedCount++;
+      failedFiles.add({'path': oldPath, 'error': error});
+    } catch (e) {
+      final error = e.toString();
+      debugPrint('Failed to rename ${fileDetail.file.path}: $error');
+      failedCount++;
+      failedFiles.add({'path': oldPath, 'error': error});
     }
   }
 
-  return {'success': successCount, 'failed': failedCount};
+  return {
+    'success': successCount,
+    'failed': failedCount,
+    'renameLog': renameLog,
+    'failedFiles': failedFiles,
+  };
 }
 
 // 定义排序标准枚举
@@ -140,6 +135,89 @@ class RenameProvider with ChangeNotifier {
   void _init() {
     // 可以在这里进行一些初始化
   }
+
+  // Worker的静态入口，用于计算新文件名
+  static String _getNewNameForWorker(
+    Map<String, dynamic> params,
+    FileDetail fileDetail,
+    int index,
+    List<FileDetail> files,
+  ) {
+    final fileName = fileDetail.file.uri.pathSegments.last;
+    final activeTabIndex = params['activeTabIndex'] as int;
+
+    switch (activeTabIndex) {
+      case 0: // 替换
+        final replaceRules =
+            (params['replaceRules'] as List<Map<String, dynamic>>)
+                .map((r) => ReplaceRule.fromJson(r))
+                .toList();
+        return _applyReplaceRule(fileName, replaceRules);
+      case 1: // 追加
+        final appendPrefix = params['appendPrefix'] as String;
+        final appendSuffix = params['appendSuffix'] as String;
+        final appendAfterFilename = params['appendAfterFilename'] as bool;
+        return _applyAppendRule(
+          fileName,
+          appendPrefix,
+          appendSuffix,
+          appendAfterFilename,
+        );
+      case 2: // 自动序号
+        final numberingPrefix = params['numberingPrefix'] as String;
+        final numberingSuffix = params['numberingSuffix'] as String;
+        final startNumber = params['startNumber'] as int;
+        final numberingType = params['numberingType'] as NumberingType;
+        final fixedDigits = params['fixedDigits'] as int;
+        final keepOriginalName = params['keepOriginalName'] as bool;
+        final mergeSameName = params['mergeSameName'] as bool;
+        final mergedNumberingCache =
+            params['mergedNumberingCache'] as Map<String, int>;
+        return _applyAutoNumberingRule(
+          fileName,
+          index,
+          files,
+          startNumber,
+          mergeSameName,
+          numberingType,
+          fixedDigits,
+          keepOriginalName,
+          numberingPrefix,
+          numberingSuffix,
+          mergedNumberingCache,
+        );
+      case 3: // EXIF命名
+        final exifTemplate = params['exifTemplate'] as String;
+        final exifCache =
+            params['exifCache'] as Map<String, Map<String, dynamic>>;
+        final mergeSameName = params['mergeSameName'] as bool;
+        final startNumber = params['startNumber'] as int;
+        final numberingPrefix = params['numberingPrefix'] as String;
+        final numberingSuffix = params['numberingSuffix'] as String;
+        final numberingType = params['numberingType'] as NumberingType;
+        final fixedDigits = params['fixedDigits'] as int;
+
+        final mergedNumberingCache =
+            params['mergedNumberingCache'] as Map<String, int>;
+        return _applyExifNamingRule(
+          fileDetail,
+          index,
+          files,
+          exifTemplate,
+          exifCache,
+          mergeSameName,
+          startNumber,
+          numberingPrefix,
+          numberingSuffix,
+          numberingType,
+          fixedDigits,
+          mergedNumberingCache,
+        );
+      default:
+        return fileName;
+    }
+  }
+
   int _activeTabIndex = 0;
   int get activeTabIndex => _activeTabIndex;
 
@@ -151,11 +229,20 @@ class RenameProvider with ChangeNotifier {
   final List<FileDetail> _files = [];
   List<FileDetail> get files => _files;
 
+  List<Map<String, String>> _lastRenameLog = [];
+  List<Map<String, String>> get lastRenameLog => _lastRenameLog;
+
+  List<Map<String, String>> _lastFailedFiles = [];
+  List<Map<String, String>> get lastFailedFiles => _lastFailedFiles;
+
   bool _mergeSameName = false;
   bool get mergeSameName => _mergeSameName;
 
   void setMergeSameName(bool value) {
     _mergeSameName = value;
+    if (_mergeSameName) {
+      _precalculateMergedNumbering();
+    }
     notifyListeners();
   }
 
@@ -198,13 +285,14 @@ class RenameProvider with ChangeNotifier {
   String get exifTemplate => _exifTemplate;
 
   final Map<String, Map<String, dynamic>> _exifCache = {};
+  final Map<String, int> _mergedNumberingCache = {};
 
   void setExifTemplate(String template) {
     _exifTemplate = template;
     notifyListeners();
   }
 
-  Future<void> loadExifData(File file) async {
+  Future<void> loadExifData(File file, {bool notify = true}) async {
     if (_exifCache.containsKey(file.path)) return;
     if (!ExifService.isSupportedImage(file.path)) return;
 
@@ -220,7 +308,9 @@ class RenameProvider with ChangeNotifier {
       _exifCache[file.path] = {}; // 出错也存空map
     }
     // 当EXIF数据加载完成时，通知UI刷新以显示可能更新的预览
-    notifyListeners();
+    if (notify) {
+      notifyListeners();
+    }
   }
 
   // 添加替换规则
@@ -319,25 +409,54 @@ class RenameProvider with ChangeNotifier {
 
   // 预览重命名结果
   String previewRename(FileDetail fileDetail, int index) {
-    final file = fileDetail.file;
-    String fileName = file.uri.pathSegments.last;
+    final fileName = fileDetail.file.uri.pathSegments.last;
 
     switch (_activeTabIndex) {
       case 0: // 替换
-        return _applyReplaceRule(fileName);
+        return _applyReplaceRule(fileName, _replaceRules);
       case 1: // 追加
-        return _applyAppendRule(fileName);
+        return _applyAppendRule(
+          fileName,
+          _appendPrefix,
+          _appendSuffix,
+          _appendAfterFilename,
+        );
       case 2: // 自动序号
-        return _applyAutoNumberingRule(fileName, index);
+        return _applyAutoNumberingRule(
+          fileName,
+          index,
+          _files,
+          _startNumber,
+          _mergeSameName,
+          _numberingType,
+          _fixedDigits,
+          _keepOriginalName,
+          _numberingPrefix,
+          _numberingSuffix,
+          _mergedNumberingCache,
+        );
       case 3: // EXIF命名
-        return _applyExifNamingRule(fileDetail, index);
+        return _applyExifNamingRule(
+          fileDetail,
+          index,
+          _files,
+          _exifTemplate,
+          _exifCache,
+          _mergeSameName,
+          _startNumber,
+          _numberingPrefix,
+          _numberingSuffix,
+          _numberingType,
+          _fixedDigits,
+          _mergedNumberingCache,
+        );
       default:
         return fileName;
     }
   }
 
   // 格式化序号的辅助方法
-  String _formatNumber(int number, NumberingType type, int digits) {
+  static String _formatNumber(int number, NumberingType type, int digits) {
     String formattedNumber;
     switch (type) {
       case NumberingType.arabic:
@@ -363,9 +482,12 @@ class RenameProvider with ChangeNotifier {
   }
 
   // 应用替换规则
-  String _applyReplaceRule(String fileName) {
+  static String _applyReplaceRule(
+    String fileName,
+    List<ReplaceRule> replaceRules,
+  ) {
     String result = fileName;
-    for (var rule in _replaceRules) {
+    for (var rule in replaceRules) {
       if (!rule.allowReplaceExtension) {
         int lastDotIndex = result.lastIndexOf('.');
         if (lastDotIndex != -1) {
@@ -385,135 +507,164 @@ class RenameProvider with ChangeNotifier {
   }
 
   // 应用追加规则
-  String _applyAppendRule(String fileName) {
-    if (_appendPrefix.isNotEmpty || _appendSuffix.isNotEmpty) {
-      if (!_appendAfterFilename) {
+  static String _applyAppendRule(
+    String fileName,
+    String appendPrefix,
+    String appendSuffix,
+    bool appendAfterFilename,
+  ) {
+    if (appendPrefix.isNotEmpty || appendSuffix.isNotEmpty) {
+      if (!appendAfterFilename) {
         int lastDotIndex = fileName.lastIndexOf('.');
         if (lastDotIndex != -1) {
           String namePart = fileName.substring(0, lastDotIndex);
           String extensionPart = fileName.substring(lastDotIndex);
-          return _appendPrefix + namePart + _appendSuffix + extensionPart;
+          return appendPrefix + namePart + appendSuffix + extensionPart;
         } else {
-          return _appendPrefix + fileName + _appendSuffix;
+          return appendPrefix + fileName + appendSuffix;
         }
       } else {
-        return _appendPrefix + fileName + _appendSuffix;
+        return appendPrefix + fileName + appendSuffix;
       }
     }
     return fileName;
   }
 
   // 应用自动序号规则
-  String _applyAutoNumberingRule(String fileName, int index) {
+  static String _applyAutoNumberingRule(
+    String fileName,
+    int index,
+    List<FileDetail> files,
+    int startNumber,
+    bool mergeSameName,
+    NumberingType numberingType,
+    int fixedDigits,
+    bool keepOriginalName,
+    String numberingPrefix,
+    String numberingSuffix,
+    Map<String, int> mergedNumberingCache,
+  ) {
     int currentNumber;
-    if (_mergeSameName) {
-      final uniqueBaseNames = _files
-          .map((f) => _getBaseName(f.file.path))
-          .toSet()
-          .toList();
-      uniqueBaseNames.sort();
-      final currentBaseName = _getBaseName(files[index].file.path);
-      final groupIndex = uniqueBaseNames.indexOf(currentBaseName);
-      currentNumber = _startNumber + groupIndex;
+    if (mergeSameName) {
+      currentNumber =
+          startNumber + (mergedNumberingCache[files[index].file.path] ?? 0);
     } else {
-      currentNumber = _startNumber + index;
+      currentNumber = startNumber + index;
     }
 
     String formattedNumber = _formatNumber(
       currentNumber,
-      _numberingType,
-      _fixedDigits,
+      numberingType,
+      fixedDigits,
     );
 
-    if (_keepOriginalName) {
+    if (keepOriginalName) {
       int lastDotIndex = fileName.lastIndexOf('.');
       if (lastDotIndex != -1) {
         String namePart = fileName.substring(0, lastDotIndex);
         String extensionPart = fileName.substring(lastDotIndex);
-        return '$_numberingPrefix$namePart$formattedNumber$_numberingSuffix$extensionPart';
+        return '$numberingPrefix$namePart$formattedNumber$numberingSuffix$extensionPart';
       } else {
-        return '$_numberingPrefix$fileName$formattedNumber$_numberingSuffix';
+        return '$numberingPrefix$fileName$formattedNumber$numberingSuffix';
       }
     } else {
       int lastDotIndex = fileName.lastIndexOf('.');
       if (lastDotIndex != -1) {
         String extensionPart = fileName.substring(lastDotIndex);
-        return '$_numberingPrefix$formattedNumber$_numberingSuffix$extensionPart';
+        return '$numberingPrefix$formattedNumber$numberingSuffix$extensionPart';
       } else {
-        return '$_numberingPrefix$formattedNumber$_numberingSuffix';
+        return '$numberingPrefix$formattedNumber$numberingSuffix';
       }
     }
   }
 
   // 应用EXIF命名规则
-  String _applyExifNamingRule(FileDetail fileDetail, int index) {
-    if (_exifTemplate.isEmpty) {
+  static String _applyExifNamingRule(
+    FileDetail fileDetail,
+    int index,
+    List<FileDetail> files,
+    String exifTemplate,
+    Map<String, Map<String, dynamic>> exifCache,
+    bool mergeSameName,
+    int startNumber,
+    String numberingPrefix,
+    String numberingSuffix,
+    NumberingType numberingType,
+    int fixedDigits,
+    Map<String, int> mergedNumberingCache,
+  ) {
+    if (exifTemplate.isEmpty) {
       return fileDetail.file.uri.pathSegments.last;
     }
 
-    final exifData = _exifCache[fileDetail.file.path] ?? {};
-    String newName = _exifTemplate;
+    final exifData = exifCache[fileDetail.file.path] ?? {};
+    String newName = exifTemplate;
 
     final RegExp placeholderRegex = RegExp(r'\[(.*?)\]');
-    newName = newName
-        .replaceAllMapped(placeholderRegex, (match) {
-          final placeholder = match.group(1);
+    const String notFound = 'NaN';
 
-          if (placeholder == '序号') {
-            int currentNumber;
-            if (_mergeSameName) {
-              final uniqueBaseNames = _files
-                  .map((f) => _getBaseName(f.file.path))
-                  .toSet()
-                  .toList();
-              uniqueBaseNames.sort();
-              final currentBaseName = _getBaseName(fileDetail.file.path);
-              final groupIndex = uniqueBaseNames.indexOf(currentBaseName);
-              currentNumber = _startNumber + groupIndex;
-            } else {
-              currentNumber = _startNumber + index;
-            }
-            return '$_numberingPrefix${_formatNumber(currentNumber, _numberingType, _fixedDigits)}$_numberingSuffix';
-          }
+    newName = newName.replaceAllMapped(placeholderRegex, (match) {
+      final placeholder = match.group(1);
 
-          final shotTime = exifData['拍摄时间'] as String?;
-          DateTime? parsedDate;
-          if (shotTime != null) {
-            try {
-              parsedDate = DateTime.parse(shotTime);
-            } catch (e) {
-              // Ignore parsing errors
-            }
-          }
+      if (placeholder == '序号') {
+        int currentNumber;
+        if (mergeSameName) {
+          currentNumber =
+              startNumber + (mergedNumberingCache[fileDetail.file.path] ?? 0);
+        } else {
+          currentNumber = startNumber + index;
+        }
+        return '$numberingPrefix${_formatNumber(currentNumber, numberingType, fixedDigits)}$numberingSuffix';
+      }
 
-          switch (placeholder) {
-            case '快门速度':
-              return (exifData['快门速度'] as String?) ??
-                  (exifData['曝光时间'] as String?) ??
-                  'N/A';
-            case '年':
-              return parsedDate?.year.toString() ?? 'N/A';
-            case '月':
-              return parsedDate?.month.toString().padLeft(2, '0') ?? 'N/A';
-            case '日':
-              return parsedDate?.day.toString().padLeft(2, '0') ?? 'N/A';
-            case '时':
-              return parsedDate?.hour.toString().padLeft(2, '0') ?? 'N/A';
-            case '分':
-              return parsedDate?.minute.toString().padLeft(2, '0') ?? 'N/A';
-            case '秒':
-              return parsedDate?.second.toString().padLeft(2, '0') ?? 'N/A';
-            case '年月日':
-              if (parsedDate == null) return 'N/A';
-              return '${parsedDate.year}-${parsedDate.month.toString().padLeft(2, '0')}-${parsedDate.day.toString().padLeft(2, '0')}';
-            case '时分秒':
-              if (parsedDate == null) return 'N/A';
-              return '${parsedDate.hour.toString().padLeft(2, '0')}:${parsedDate.minute.toString().padLeft(2, '0')}:${parsedDate.second.toString().padLeft(2, '0')}';
-            default:
-              return exifData[placeholder] as String? ?? 'N/A';
+      final shotTime = exifData['拍摄时间'] as String?;
+      DateTime? parsedDate;
+      if (shotTime != null) {
+        try {
+          // 尝试多种格式解析
+          if (shotTime.contains(' ') && shotTime.contains(':')) {
+            parsedDate = DateFormat("yyyy-MM-dd HH:mm:ss").parse(shotTime);
+          } else {
+            parsedDate = DateTime.parse(shotTime);
           }
-        })
-        .replaceAll('N/A', '');
+        } catch (e) {
+          debugPrint('Failed to parse date: $shotTime, error: $e');
+          // Ignore parsing errors
+        }
+      }
+
+      switch (placeholder) {
+        case '快门速度':
+          final shutterSpeed =
+              (exifData['快门速度'] as String?) ??
+              (exifData['曝光时间'] as String?) ??
+              notFound;
+          return shutterSpeed.replaceAll('/', '-');
+        case '年':
+          return parsedDate?.year.toString() ?? notFound;
+        case '月':
+          return parsedDate?.month.toString().padLeft(2, '0') ?? notFound;
+        case '日':
+          return parsedDate?.day.toString().padLeft(2, '0') ?? notFound;
+        case '时':
+          return parsedDate?.hour.toString().padLeft(2, '0') ?? notFound;
+        case '分':
+          return parsedDate?.minute.toString().padLeft(2, '0') ?? notFound;
+        case '秒':
+          return parsedDate?.second.toString().padLeft(2, '0') ?? notFound;
+        case '年月日':
+          if (parsedDate == null) return notFound;
+          return '${parsedDate.year}-${parsedDate.month.toString().padLeft(2, '0')}-${parsedDate.day.toString().padLeft(2, '0')}';
+        case '时分秒':
+          if (parsedDate == null) return notFound;
+          return '${parsedDate.hour.toString().padLeft(2, '0')}-${parsedDate.minute.toString().padLeft(2, '0')}-${parsedDate.second.toString().padLeft(2, '0')}';
+        default:
+          return (exifData[placeholder] as String? ?? notFound).replaceAll(
+            '/',
+            '-',
+          );
+      }
+    });
 
     int lastDotIndex = fileDetail.file.uri.pathSegments.last.lastIndexOf('.');
     if (lastDotIndex != -1) {
@@ -526,12 +677,29 @@ class RenameProvider with ChangeNotifier {
     }
   }
 
-  String _getBaseName(String path) {
+  static String _getBaseName(String path) {
     final lastSeparator = path.lastIndexOf(Platform.pathSeparator);
     final fileName = path.substring(lastSeparator + 1);
     final lastDot = fileName.lastIndexOf('.');
     if (lastDot == -1) return fileName;
     return fileName.substring(0, lastDot);
+  }
+
+  void _precalculateMergedNumbering() {
+    _mergedNumberingCache.clear();
+    if (_files.isEmpty) return;
+
+    final uniqueBaseNames = _files
+        .map((f) => RenameProvider._getBaseName(f.file.path))
+        .toSet()
+        .toList();
+    uniqueBaseNames.sort();
+
+    for (final fileDetail in _files) {
+      final baseName = RenameProvider._getBaseName(fileDetail.file.path);
+      final groupIndex = uniqueBaseNames.indexOf(baseName);
+      _mergedNumberingCache[fileDetail.file.path] = groupIndex;
+    }
   }
 
   // 检查文件是否已存在（基于文件名和扩展名的一致性）
@@ -548,6 +716,7 @@ class RenameProvider with ChangeNotifier {
   Future<void> addFiles(List<XFile> xFiles) async {
     final List<File> allFilePaths = [];
 
+    // 1. 收集所有文件路径，包括子目录
     for (final xFile in xFiles) {
       final fileEntity = FileSystemEntity.typeSync(xFile.path);
       if (fileEntity == FileSystemEntityType.directory) {
@@ -561,32 +730,53 @@ class RenameProvider with ChangeNotifier {
       }
     }
 
+    // 2. 过滤掉已存在的文件
     final newFiles = allFilePaths
         .where((file) => !_isFileAlreadyAdded(file.path))
         .toList();
 
-    if (newFiles.isNotEmpty) {
-      final List<FileDetail> newFileDetails = [];
-      for (final file in newFiles) {
-        try {
-          final size = await file.length();
-          final lastModified = await file.lastModified();
-          newFileDetails.add(
-            FileDetail(file: file, size: size, lastModified: lastModified),
-          );
-        } catch (e) {
-          debugPrint("Error reading file details for ${file.path}: $e");
-        }
-      }
-      _files.addAll(newFileDetails);
-      _sortFiles();
-      notifyListeners();
+    if (newFiles.isEmpty) return;
 
-      // 异步加载新文件的EXIF数据
-      for (final detail in newFileDetails) {
-        loadExifData(detail.file);
-      }
+    // 3. 并行获取文件详情，并限制并发数量
+    const concurrencyLimit = 20; // 限制并发数量
+    final List<FileDetail> newFileDetails = [];
+    for (var i = 0; i < newFiles.length; i += concurrencyLimit) {
+      final sublist = (i + concurrencyLimit > newFiles.length)
+          ? newFiles.sublist(i)
+          : newFiles.sublist(i, i + concurrencyLimit);
+      await Future.wait(
+        sublist.map((file) async {
+          try {
+            final size = await file.length();
+            final lastModified = await file.lastModified();
+            newFileDetails.add(
+              FileDetail(file: file, size: size, lastModified: lastModified),
+            );
+          } catch (e) {
+            debugPrint("Error reading file details for ${file.path}: $e");
+          }
+        }),
+      );
     }
+
+    if (newFileDetails.isEmpty) return;
+
+    // 4. 添加文件，排序，并异步加载EXIF，最后统一通知UI
+    _files.addAll(newFileDetails);
+    _sortFiles();
+    if (_mergeSameName) {
+      _precalculateMergedNumbering();
+    }
+
+    // 立即通知UI，让文件列表先显示出来
+    notifyListeners();
+
+    // 异步加载EXIF，但不立即通知UI
+    final exifFutures = newFileDetails.map(
+      (detail) => loadExifData(detail.file, notify: false),
+    );
+    // 等待所有EXIF加载完成后，再统一通知UI更新
+    Future.wait(exifFutures).then((_) => notifyListeners());
   }
 
   // 递归获取文件夹中的所有文件
@@ -621,17 +811,25 @@ class RenameProvider with ChangeNotifier {
           await FileSelectorService.selectMultipleFiles(
             allowedExtensions: null,
           );
-      if (filePaths != null) {
-        final existingFileCount = filePaths
-            .where((path) => _isFileAlreadyAdded(path))
-            .length;
-        final newFilePaths = filePaths
-            .where((path) => !_isFileAlreadyAdded(path))
-            .toList();
+      if (filePaths == null) return 0;
 
-        if (newFilePaths.isNotEmpty) {
-          final List<FileDetail> newFileDetails = [];
-          for (final path in newFilePaths) {
+      final existingFileCount = filePaths
+          .where((path) => _isFileAlreadyAdded(path))
+          .length;
+      final newFilePaths = filePaths
+          .where((path) => !_isFileAlreadyAdded(path))
+          .toList();
+
+      if (newFilePaths.isEmpty) return existingFileCount;
+
+      const concurrencyLimit = 20; // 限制并发数量
+      final List<FileDetail> newFileDetails = [];
+      for (var i = 0; i < newFilePaths.length; i += concurrencyLimit) {
+        final sublist = (i + concurrencyLimit > newFilePaths.length)
+            ? newFilePaths.sublist(i)
+            : newFilePaths.sublist(i, i + concurrencyLimit);
+        await Future.wait(
+          sublist.map((path) async {
             try {
               final file = File(path);
               final size = await file.length();
@@ -642,18 +840,27 @@ class RenameProvider with ChangeNotifier {
             } catch (e) {
               debugPrint("Error reading file details for $path: $e");
             }
-          }
-          _files.addAll(newFileDetails);
-          _sortFiles();
-          notifyListeners();
-
-          // 异步加载新文件的EXIF数据
-          for (final detail in newFileDetails) {
-            loadExifData(detail.file);
-          }
-        }
-        return existingFileCount;
+          }),
+        );
       }
+
+      if (newFileDetails.isEmpty) return existingFileCount;
+
+      _files.addAll(newFileDetails);
+      _sortFiles();
+      if (_mergeSameName) {
+        _precalculateMergedNumbering();
+      }
+
+      // 立即通知UI，让文件列表先显示出来
+      notifyListeners();
+
+      final exifFutures = newFileDetails.map(
+        (detail) => loadExifData(detail.file, notify: false),
+      );
+      Future.wait(exifFutures).then((_) => notifyListeners());
+
+      return existingFileCount;
     } catch (e) {
       debugPrint('Error selecting files: $e');
     }
@@ -661,7 +868,7 @@ class RenameProvider with ChangeNotifier {
   }
 
   // 将整数转换为罗马数字
-  String _convertIntToRoman(int number) {
+  static String _convertIntToRoman(int number) {
     if (number <= 0) return '';
 
     final List<Map<String, dynamic>> romanNumerals = [
@@ -692,7 +899,7 @@ class RenameProvider with ChangeNotifier {
   }
 
   // 将整数转换为字母
-  String _convertIntToLetter(int number) {
+  static String _convertIntToLetter(int number) {
     if (number <= 0) return '';
 
     StringBuffer result = StringBuffer();
@@ -709,20 +916,28 @@ class RenameProvider with ChangeNotifier {
   Future<int> selectFolder() async {
     try {
       final String? folderPath = await FileSelectorService.selectDirectory();
-      if (folderPath != null) {
-        final List<String> filePaths =
-            await FileSelectorService.getFilesInDirectory(folderPath);
+      if (folderPath == null) return 0;
 
-        final existingFileCount = filePaths
-            .where((path) => _isFileAlreadyAdded(path))
-            .length;
-        final newFilePaths = filePaths
-            .where((path) => !_isFileAlreadyAdded(path))
-            .toList();
+      final List<String> filePaths =
+          await FileSelectorService.getFilesInDirectory(folderPath);
 
-        if (newFilePaths.isNotEmpty) {
-          final List<FileDetail> newFileDetails = [];
-          for (final path in newFilePaths) {
+      final existingFileCount = filePaths
+          .where((path) => _isFileAlreadyAdded(path))
+          .length;
+      final newFilePaths = filePaths
+          .where((path) => !_isFileAlreadyAdded(path))
+          .toList();
+
+      if (newFilePaths.isEmpty) return existingFileCount;
+
+      const concurrencyLimit = 20; // 限制并发数量
+      final List<FileDetail> newFileDetails = [];
+      for (var i = 0; i < newFilePaths.length; i += concurrencyLimit) {
+        final sublist = (i + concurrencyLimit > newFilePaths.length)
+            ? newFilePaths.sublist(i)
+            : newFilePaths.sublist(i, i + concurrencyLimit);
+        await Future.wait(
+          sublist.map((path) async {
             try {
               final file = File(path);
               final size = await file.length();
@@ -733,18 +948,27 @@ class RenameProvider with ChangeNotifier {
             } catch (e) {
               debugPrint("Error reading file details for $path: $e");
             }
-          }
-          _files.addAll(newFileDetails);
-          _sortFiles();
-          notifyListeners();
-
-          // 异步加载新文件的EXIF数据
-          for (final detail in newFileDetails) {
-            loadExifData(detail.file);
-          }
-        }
-        return existingFileCount;
+          }),
+        );
       }
+
+      if (newFileDetails.isEmpty) return existingFileCount;
+
+      _files.addAll(newFileDetails);
+      _sortFiles();
+      if (_mergeSameName) {
+        _precalculateMergedNumbering();
+      }
+
+      // 立即通知UI，让文件列表先显示出来
+      notifyListeners();
+
+      final exifFutures = newFileDetails.map(
+        (detail) => loadExifData(detail.file, notify: false),
+      );
+      Future.wait(exifFutures).then((_) => notifyListeners());
+
+      return existingFileCount;
     } catch (e) {
       debugPrint('Error selecting folder: $e');
     }
@@ -755,6 +979,9 @@ class RenameProvider with ChangeNotifier {
   void clearSelection() {
     _files.clear();
     _exifCache.clear(); // 清除文件时也要清除EXIF缓存
+    _lastRenameLog.clear();
+    _lastFailedFiles.clear();
+    _mergedNumberingCache.clear();
     notifyListeners();
   }
 
@@ -763,11 +990,16 @@ class RenameProvider with ChangeNotifier {
     if (index >= 0 && index < _files.length) {
       final removedFile = _files.removeAt(index);
       _exifCache.remove(removedFile.file.path); // 移除文件时也要移除EXIF缓存
+      if (_mergeSameName) {
+        _precalculateMergedNumbering();
+      }
       notifyListeners();
     }
   }
 
-  Future<Map<String, int>> executeRename() async {
+  Future<Map<String, dynamic>> executeRename() async {
+    _lastRenameLog.clear();
+    _lastFailedFiles.clear();
     // 准备要传递给Isolate的参数
     final params = {
       'files': _files.map((f) => f.toJson()).toList(),
@@ -785,15 +1017,46 @@ class RenameProvider with ChangeNotifier {
       'mergeSameName': _mergeSameName,
       'exifTemplate': _exifTemplate,
       'exifCache': _exifCache,
+      'mergedNumberingCache': _mergedNumberingCache,
     };
     // 使用 compute 函数可以简化 Isolate 的调用
-    return await compute(_renameWorker, params);
+    final result = await compute(_renameWorker, params);
+    _lastRenameLog = (result['renameLog'] as List)
+        .map((e) => Map<String, String>.from(e))
+        .toList();
+    _lastFailedFiles = (result['failedFiles'] as List)
+        .map((e) => Map<String, String>.from(e))
+        .toList();
+
+    notifyListeners();
+    return result;
+  }
+
+  Future<void> undoRename() async {
+    if (_lastRenameLog.isEmpty) return;
+
+    for (final log in _lastRenameLog.reversed) {
+      final oldPath = log['oldPath'];
+      final newPath = log['newPath'];
+      if (oldPath != null && newPath != null) {
+        try {
+          await File(newPath).rename(oldPath);
+        } catch (e) {
+          debugPrint('Failed to undo rename for $newPath: $e');
+        }
+      }
+    }
+    _lastRenameLog.clear();
+    notifyListeners();
   }
 
   // 排序文件的方法
   void sortFiles(SortCriterion criterion) {
     _sortCriterion = criterion;
     _sortFiles();
+    if (_mergeSameName) {
+      _precalculateMergedNumbering();
+    }
     notifyListeners();
   }
 

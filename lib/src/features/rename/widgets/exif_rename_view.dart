@@ -279,14 +279,29 @@ class _ExifRenameViewState extends State<ExifRenameView> {
   }
 
   void _insertTag(String tag) {
-    // 直接在文本末尾追加，不处理焦点
-    final currentText = _controller.text;
-    final newText = currentText + tag;
-    _controller.text = newText;
-    // 更新光标位置到末尾，这会在TextField获得焦点时生效
-    _controller.selection = TextSelection.fromPosition(
-      TextPosition(offset: newText.length),
-    );
+    final selection = _controller.selection;
+    if (selection.isValid) {
+      final newText = _controller.text.replaceRange(
+        selection.start,
+        selection.end,
+        tag,
+      );
+      _controller.value = TextEditingValue(
+        text: newText,
+        selection: TextSelection.fromPosition(
+          TextPosition(offset: selection.start + tag.length),
+        ),
+      );
+    } else {
+      // 如果没有有效的选区（例如输入框未聚焦），则在末尾追加
+      final newText = _controller.text + tag;
+      _controller.value = TextEditingValue(
+        text: newText,
+        selection: TextSelection.fromPosition(
+          TextPosition(offset: newText.length),
+        ),
+      );
+    }
   }
 }
 

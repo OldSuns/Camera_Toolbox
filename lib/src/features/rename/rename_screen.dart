@@ -42,21 +42,18 @@ class _RenameScreenState extends State<RenameScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('批量重命名'),
-        bottom: TabBar(
-          controller: _tabController,
-          tabs: const [
-            Tab(text: '替换'),
-            Tab(text: '追加'),
-            Tab(text: '自动序号'),
-            Tab(text: 'EXIF命名'),
-          ],
-        ),
-      ),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          TabBar(
+            controller: _tabController,
+            tabs: const [
+              Tab(text: '替换'),
+              Tab(text: '追加'),
+              Tab(text: '自动序号'),
+              Tab(text: 'EXIF命名'),
+            ],
+          ),
           Expanded(
             child: TabBarView(
               controller: _tabController,
@@ -90,7 +87,7 @@ class _RenameScreenState extends State<RenameScreen>
 
   /// 显示重复文件提示
   void _showDuplicateFilesSnackBar(int duplicateCount) {
-    if (duplicateCount > 0) {
+    if (duplicateCount > 0 && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('已过滤 $duplicateCount 个重复文件'),
@@ -98,6 +95,17 @@ class _RenameScreenState extends State<RenameScreen>
         ),
       );
     }
+  }
+
+  /// 处理文件拖放
+  Future<void> _handleDrop(DropDoneDetails details) async {
+    final renameProvider = context.read<RenameProvider>();
+    final beforeCount = renameProvider.files.length;
+    await renameProvider.addFiles(details.files);
+    final afterCount = renameProvider.files.length;
+    final addedCount = afterCount - beforeCount;
+    final duplicateCount = details.files.length - addedCount;
+    _showDuplicateFilesSnackBar(duplicateCount);
   }
 
   /// 构建文件选择区域
@@ -117,23 +125,7 @@ class _RenameScreenState extends State<RenameScreen>
         ),
         child: renameProvider.files.isEmpty
             ? DropTarget(
-                onDragDone: (detail) async {
-                  // 记录添加前的文件数量
-                  final beforeCount = renameProvider.files.length;
-
-                  // 添加文件
-                  await renameProvider.addFiles(detail.files);
-
-                  // 计算实际添加的文件数量
-                  final afterCount = renameProvider.files.length;
-                  final addedCount = afterCount - beforeCount;
-
-                  // 计算重复文件数量
-                  final duplicateCount = detail.files.length - addedCount;
-
-                  // 显示重复文件提示
-                  _showDuplicateFilesSnackBar(duplicateCount);
-                },
+                onDragDone: _handleDrop,
                 child: Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -153,12 +145,20 @@ class _RenameScreenState extends State<RenameScreen>
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           TextButton(
-                            onPressed: () => renameProvider.selectFiles(),
+                            onPressed: () async {
+                              final duplicateCount = await renameProvider
+                                  .selectFiles();
+                              _showDuplicateFilesSnackBar(duplicateCount);
+                            },
                             child: const Text('选择文件'),
                           ),
                           const SizedBox(width: 8),
                           TextButton(
-                            onPressed: () => renameProvider.selectFolder(),
+                            onPressed: () async {
+                              final duplicateCount = await renameProvider
+                                  .selectFolder();
+                              _showDuplicateFilesSnackBar(duplicateCount);
+                            },
                             child: const Text('选择文件夹'),
                           ),
                         ],
@@ -204,23 +204,7 @@ class _RenameScreenState extends State<RenameScreen>
                   // 文件列表
                   Expanded(
                     child: DropTarget(
-                      onDragDone: (detail) async {
-                        // 记录添加前的文件数量
-                        final beforeCount = renameProvider.files.length;
-
-                        // 添加文件
-                        await renameProvider.addFiles(detail.files);
-
-                        // 计算实际添加的文件数量
-                        final afterCount = renameProvider.files.length;
-                        final addedCount = afterCount - beforeCount;
-
-                        // 计算重复文件数量
-                        final duplicateCount = detail.files.length - addedCount;
-
-                        // 显示重复文件提示
-                        _showDuplicateFilesSnackBar(duplicateCount);
-                      },
+                      onDragDone: _handleDrop,
                       child: ListView.builder(
                         padding: const EdgeInsets.all(8),
                         itemCount: renameProvider.files.length,
@@ -337,6 +321,20 @@ class _RenameScreenState extends State<RenameScreen>
                 : null,
           ),
         ),
+        // 撤销按钮
+        if (renameProvider.lastRenameLog.isNotEmpty)
+          OutlinedButton(
+            onPressed: () {
+              renameProvider.undoRename();
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('撤销操作已完成'),
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            },
+            child: const Text('撤销上次操作'),
+          ),
         // 确定重命名按钮
         ElevatedButton(
           onPressed: renameProvider.files.isNotEmpty
@@ -386,7 +384,7 @@ class _RenameScreenState extends State<RenameScreen>
       builder: (BuildContext dialogContext) {
         return AlertDialog(
           title: const Text('确认重命名'),
-          content: Text('即将重命名 ${provider.files.length} 个文件。此操作无法撤销，是否继续？'),
+          content: Text('即将重命名 ${provider.files.length} 个文件，是否继续？'),
           actions: <Widget>[
             TextButton(
               child: const Text('取消'),
@@ -446,8 +444,42 @@ class _RenameScreenState extends State<RenameScreen>
         builder: (BuildContext dialogContext) {
           return AlertDialog(
             title: const Text('重命名完成'),
-            content: Text(
-              '成功：${result['success']} 个\n失败：${result['failed']} 个',
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('成功：${result['success']} 个\n失败：${result['failed']} 个'),
+                  if (provider.lastFailedFiles.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    const Text(
+                      '失败详情:',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 150, // 限制列表高度
+                      width: double.maxFinite,
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: provider.lastFailedFiles.length,
+                        itemBuilder: (context, index) {
+                          final failedFile = provider.lastFailedFiles[index];
+                          final fileName =
+                              failedFile['path']
+                                  ?.split(Platform.pathSeparator)
+                                  .last ??
+                              'Unknown File';
+                          return Tooltip(
+                            message: '路径: ${failedFile['path']}',
+                            child: Text('$fileName: ${failedFile['error']}'),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ),
             actions: <Widget>[
               TextButton(
@@ -463,7 +495,8 @@ class _RenameScreenState extends State<RenameScreen>
       );
       // Clear selection after showing result
       if (!mounted) return;
-      provider.clearSelection();
+      // 操作成功后不清空文件列表，以便用户看到结果并可以撤销
+      // provider.clearSelection();
     } catch (e) {
       if (!mounted) return;
       navigator.pop(); // Close loading dialog on error
