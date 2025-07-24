@@ -74,7 +74,7 @@ class _RenameScreenState extends State<RenameScreen>
                   children: [
                     _buildFileInfoAndActions(renameProvider),
                     const SizedBox(height: 16),
-                    _buildFileSelectionArea(renameProvider),
+                    _buildFileAndErrorArea(renameProvider),
                   ],
                 ),
               );
@@ -108,17 +108,27 @@ class _RenameScreenState extends State<RenameScreen>
     _showDuplicateFilesSnackBar(duplicateCount);
   }
 
+  /// 构建文件列表和错误日志区域
+  Widget _buildFileAndErrorArea(RenameProvider renameProvider) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+      child: Column(
+        children: [
+          _buildFileSelectionArea(renameProvider),
+          if (renameProvider.errors.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            _buildErrorList(renameProvider),
+          ],
+        ],
+      ),
+    );
+  }
+
   /// 构建文件选择区域
   Widget _buildFileSelectionArea(RenameProvider renameProvider) {
-    // 计算容器高度：最小150，每个文件项约60高度，最大300
-    final containerHeight = renameProvider.files.isEmpty
-        ? 150.0
-        : (150.0 + (renameProvider.files.length * 60.0)).clamp(150.0, 300.0);
-
     return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 16),
       child: Container(
-        height: containerHeight,
+        height: 300, // Fixed height for the file list
         decoration: BoxDecoration(
           border: Border.all(color: Colors.grey),
           borderRadius: BorderRadius.circular(8),
@@ -177,11 +187,8 @@ class _RenameScreenState extends State<RenameScreen>
                       children: [
                         TextButton(
                           onPressed: () async {
-                            // 调用选择文件方法并获取重复文件数量
                             final duplicateCount = await renameProvider
                                 .selectFiles();
-
-                            // 显示重复文件提示
                             _showDuplicateFilesSnackBar(duplicateCount);
                           },
                           child: const Text('添加文件'),
@@ -189,11 +196,8 @@ class _RenameScreenState extends State<RenameScreen>
                         const SizedBox(width: 8),
                         TextButton(
                           onPressed: () async {
-                            // 调用选择文件夹方法并获取重复文件数量
                             final duplicateCount = await renameProvider
                                 .selectFolder();
-
-                            // 显示重复文件提示
                             _showDuplicateFilesSnackBar(duplicateCount);
                           },
                           child: const Text('添加文件夹'),
@@ -257,6 +261,61 @@ class _RenameScreenState extends State<RenameScreen>
                   ),
                 ],
               ),
+      ),
+    );
+  }
+
+  /// 构建错误日志列表
+  Widget _buildErrorList(RenameProvider renameProvider) {
+    return Card(
+      color: Theme.of(context).colorScheme.errorContainer,
+      child: Container(
+        height: 150, // Fixed height for the error list
+        padding: const EdgeInsets.all(8.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '处理日志 (${renameProvider.errors.length} 条)',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: Theme.of(context).colorScheme.onErrorContainer,
+              ),
+            ),
+            const Divider(),
+            Expanded(
+              child: ListView.builder(
+                itemCount: renameProvider.errors.length,
+                itemBuilder: (context, index) {
+                  final error = renameProvider.errors[index];
+                  final fileName =
+                      error.filePath?.split(Platform.pathSeparator).last ??
+                      'N/A';
+                  return ListTile(
+                    dense: true,
+                    leading: Icon(
+                      Icons.warning_amber_rounded,
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                    title: Text(
+                      '文件: $fileName',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onErrorContainer,
+                      ),
+                    ),
+                    subtitle: Text(
+                      error.message,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onErrorContainer
+                            .withAlpha(204), // 255 * 0.8
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

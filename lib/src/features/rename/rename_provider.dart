@@ -4,6 +4,8 @@ import 'package:intl/intl.dart';
 import 'package:cross_file/cross_file.dart';
 import '../exif_reader/exif_service.dart';
 import '../../shared/services/file_selector_service.dart';
+import '../../shared/utils/lru_cache.dart';
+import 'rename_exception.dart';
 import 'replace_rule.dart';
 
 // Isolate的入口函数必须是顶层函数或静态方法
@@ -33,10 +35,12 @@ Future<Map<String, dynamic>> _renameWorker(Map<String, dynamic> params) async {
 
       if (oldPath != newPath) {
         if (await File(newPath).exists()) {
-          const error = 'File already exists';
-          debugPrint('$error: $newPath, skipping rename.');
           failedCount++;
-          failedFiles.add({'path': oldPath, 'error': error});
+          failedFiles.add({
+            'type': 'file_exists',
+            'path': oldPath,
+            'newPath': newPath,
+          });
           continue;
         }
         await fileDetail.file.rename(newPath);
@@ -44,15 +48,19 @@ Future<Map<String, dynamic>> _renameWorker(Map<String, dynamic> params) async {
       }
       successCount++;
     } on FileSystemException catch (e) {
-      final error = e.osError?.message ?? e.message;
-      debugPrint('Failed to rename ${fileDetail.file.path}: $error');
       failedCount++;
-      failedFiles.add({'path': oldPath, 'error': error});
+      failedFiles.add({
+        'type': 'filesystem',
+        'path': oldPath,
+        'error': e.osError?.message ?? e.message,
+      });
     } catch (e) {
-      final error = e.toString();
-      debugPrint('Failed to rename ${fileDetail.file.path}: $error');
       failedCount++;
-      failedFiles.add({'path': oldPath, 'error': error});
+      failedFiles.add({
+        'type': 'generic',
+        'path': oldPath,
+        'error': e.toString(),
+      });
     }
   }
 
@@ -204,7 +212,8 @@ class RenameProvider with ChangeNotifier {
           index,
           files,
           exifTemplate,
-          exifCache,
+          // LruCache is not directly serializable, so we convert it to a Map
+          Map<String, Map<String, dynamic>>.from(exifCache),
           mergeSameName,
           startNumber,
           numberingPrefix,
@@ -227,6 +236,7 @@ class RenameProvider with ChangeNotifier {
   }
 
   final List<FileDetail> _files = [];
+  final Set<String> _addedFilePaths = {};
   List<FileDetail> get files => _files;
 
   List<Map<String, String>> _lastRenameLog = [];
@@ -234,6 +244,9 @@ class RenameProvider with ChangeNotifier {
 
   List<Map<String, String>> _lastFailedFiles = [];
   List<Map<String, String>> get lastFailedFiles => _lastFailedFiles;
+
+  final List<RenameException> _errors = [];
+  List<RenameException> get errors => _errors;
 
   bool _mergeSameName = false;
   bool get mergeSameName => _mergeSameName;
@@ -284,7 +297,7 @@ class RenameProvider with ChangeNotifier {
   String _exifTemplate = '';
   String get exifTemplate => _exifTemplate;
 
-  final Map<String, Map<String, dynamic>> _exifCache = {};
+  final LruCache<String, Map<String, dynamic>> _exifCache = LruCache(200);
   final Map<String, int> _mergedNumberingCache = {};
 
   void setExifTemplate(String template) {
@@ -299,13 +312,14 @@ class RenameProvider with ChangeNotifier {
     try {
       final exifData = await ExifService.readExifFromFile(file.path);
       if (exifData.hasExif) {
-        _exifCache[file.path] = exifData.translatedData;
+        _exifCache.put(file.path, exifData.translatedData);
       } else {
-        _exifCache[file.path] = {}; // 存一个空map表示没有EXIF
+        _exifCache.put(file.path, {}); // 存一个空map表示没有EXIF
       }
     } catch (e) {
       debugPrint('Failed to load EXIF for ${file.path}: $e');
-      _exifCache[file.path] = {}; // 出错也存空map
+      _errors.add(ExifParsingException(file.path, e.toString()));
+      _exifCache.put(file.path, {}); // 出错也存空map
     }
     // 当EXIF数据加载完成时，通知UI刷新以显示可能更新的预览
     if (notify) {
@@ -441,7 +455,7 @@ class RenameProvider with ChangeNotifier {
           index,
           _files,
           _exifTemplate,
-          _exifCache,
+          _exifCache.toMap(),
           _mergeSameName,
           _startNumber,
           _numberingPrefix,
@@ -689,22 +703,29 @@ class RenameProvider with ChangeNotifier {
     _mergedNumberingCache.clear();
     if (_files.isEmpty) return;
 
+    // First, get a sorted list of unique base names from the already sorted _files list.
     final uniqueBaseNames = _files
-        .map((f) => RenameProvider._getBaseName(f.file.path))
+        .map((f) => _getBaseName(f.file.path))
         .toSet()
         .toList();
-    uniqueBaseNames.sort();
+    uniqueBaseNames.sort(); // Ensure the base names are sorted alphabetically.
 
+    // Create a map for quick lookups of a base name's group index.
+    final Map<String, int> baseNameIndexMap = {
+      for (var i = 0; i < uniqueBaseNames.length; i++) uniqueBaseNames[i]: i,
+    };
+
+    // Assign the group index to each file.
     for (final fileDetail in _files) {
-      final baseName = RenameProvider._getBaseName(fileDetail.file.path);
-      final groupIndex = uniqueBaseNames.indexOf(baseName);
-      _mergedNumberingCache[fileDetail.file.path] = groupIndex;
+      final baseName = _getBaseName(fileDetail.file.path);
+      _mergedNumberingCache[fileDetail.file.path] =
+          baseNameIndexMap[baseName] ?? 0;
     }
   }
 
   // 检查文件是否已存在（基于文件名和扩展名的一致性）
   bool _isFileAlreadyAdded(String filePath) {
-    return _files.any((existingDetail) => existingDetail.file.path == filePath);
+    return _addedFilePaths.contains(filePath);
   }
 
   // 公共方法：检查文件是否已存在
@@ -754,6 +775,7 @@ class RenameProvider with ChangeNotifier {
             );
           } catch (e) {
             debugPrint("Error reading file details for ${file.path}: $e");
+            _errors.add(FileReadException(file.path, e.toString()));
           }
         }),
       );
@@ -763,6 +785,9 @@ class RenameProvider with ChangeNotifier {
 
     // 4. 添加文件，排序，并异步加载EXIF，最后统一通知UI
     _files.addAll(newFileDetails);
+    for (final detail in newFileDetails) {
+      _addedFilePaths.add(detail.file.path);
+    }
     _sortFiles();
     if (_mergeSameName) {
       _precalculateMergedNumbering();
@@ -839,6 +864,7 @@ class RenameProvider with ChangeNotifier {
               );
             } catch (e) {
               debugPrint("Error reading file details for $path: $e");
+              _errors.add(FileReadException(path, e.toString()));
             }
           }),
         );
@@ -847,6 +873,9 @@ class RenameProvider with ChangeNotifier {
       if (newFileDetails.isEmpty) return existingFileCount;
 
       _files.addAll(newFileDetails);
+      for (final detail in newFileDetails) {
+        _addedFilePaths.add(detail.file.path);
+      }
       _sortFiles();
       if (_mergeSameName) {
         _precalculateMergedNumbering();
@@ -947,6 +976,7 @@ class RenameProvider with ChangeNotifier {
               );
             } catch (e) {
               debugPrint("Error reading file details for $path: $e");
+              _errors.add(FileReadException(path, e.toString()));
             }
           }),
         );
@@ -955,6 +985,9 @@ class RenameProvider with ChangeNotifier {
       if (newFileDetails.isEmpty) return existingFileCount;
 
       _files.addAll(newFileDetails);
+      for (final detail in newFileDetails) {
+        _addedFilePaths.add(detail.file.path);
+      }
       _sortFiles();
       if (_mergeSameName) {
         _precalculateMergedNumbering();
@@ -978,9 +1011,11 @@ class RenameProvider with ChangeNotifier {
   // 清除选择的方法
   void clearSelection() {
     _files.clear();
-    _exifCache.clear(); // 清除文件时也要清除EXIF缓存
+    _addedFilePaths.clear();
+    _exifCache.clear();
     _lastRenameLog.clear();
     _lastFailedFiles.clear();
+    _errors.clear();
     _mergedNumberingCache.clear();
     notifyListeners();
   }
@@ -989,7 +1024,8 @@ class RenameProvider with ChangeNotifier {
   void removeFile(int index) {
     if (index >= 0 && index < _files.length) {
       final removedFile = _files.removeAt(index);
-      _exifCache.remove(removedFile.file.path); // 移除文件时也要移除EXIF缓存
+      _addedFilePaths.remove(removedFile.file.path);
+      _exifCache.remove(removedFile.file.path);
       if (_mergeSameName) {
         _precalculateMergedNumbering();
       }
@@ -1016,20 +1052,43 @@ class RenameProvider with ChangeNotifier {
       'keepOriginalName': _keepOriginalName,
       'mergeSameName': _mergeSameName,
       'exifTemplate': _exifTemplate,
-      'exifCache': _exifCache,
+      'exifCache': _exifCache.toMap(),
       'mergedNumberingCache': _mergedNumberingCache,
     };
     // 使用 compute 函数可以简化 Isolate 的调用
     final result = await compute(_renameWorker, params);
+
     _lastRenameLog = (result['renameLog'] as List)
         .map((e) => Map<String, String>.from(e))
         .toList();
-    _lastFailedFiles = (result['failedFiles'] as List)
-        .map((e) => Map<String, String>.from(e))
+
+    final failedFilesData = result['failedFiles'] as List;
+    _errors.clear();
+    for (final errorData in failedFilesData) {
+      final map = Map<String, String>.from(errorData);
+      final type = map['type'];
+      final path = map['path']!;
+      final error = map['error'] ?? 'Unknown error';
+
+      switch (type) {
+        case 'file_exists':
+          _errors.add(RenameFileExistsException(path, map['newPath']!));
+          break;
+        case 'filesystem':
+          _errors.add(RenameFileSystemException(path, error));
+          break;
+        case 'generic':
+          _errors.add(GenericRenameException(path, error));
+          break;
+      }
+    }
+    // For compatibility with the old UI, we still populate _lastFailedFiles
+    _lastFailedFiles = _errors
+        .map((e) => {'path': e.filePath ?? '', 'error': e.message})
         .toList();
 
     notifyListeners();
-    return result;
+    return {'success': result['success'], 'failed': result['failed']};
   }
 
   Future<void> undoRename() async {
