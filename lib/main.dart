@@ -77,8 +77,10 @@ class _CameraToolboxAppState extends State<CameraToolboxApp>
   }
 
   void _configureWindowCloseHandler() async {
-    // 拦截默认的关闭行为
-    await windowManager.setPreventClose(true);
+    // 拦截默认的关闭行为，仅在桌面平台上支持
+    if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
+      await windowManager.setPreventClose(true);
+    }
   }
 
   @override
