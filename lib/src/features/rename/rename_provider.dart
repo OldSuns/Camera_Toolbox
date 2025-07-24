@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 import 'package:cross_file/cross_file.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../exif_reader/exif_service.dart';
 import '../../shared/services/file_selector_service.dart';
 import '../../shared/utils/lru_cache.dart';
@@ -703,23 +704,19 @@ class RenameProvider with ChangeNotifier {
     _mergedNumberingCache.clear();
     if (_files.isEmpty) return;
 
-    // First, get a sorted list of unique base names from the already sorted _files list.
-    final uniqueBaseNames = _files
-        .map((f) => _getBaseName(f.file.path))
-        .toSet()
-        .toList();
-    uniqueBaseNames.sort(); // Ensure the base names are sorted alphabetically.
+    // Create a map to track the first occurrence order of base names
+    final Map<String, int> baseNameFirstIndexMap = {};
+    int groupIndex = 0;
 
-    // Create a map for quick lookups of a base name's group index.
-    final Map<String, int> baseNameIndexMap = {
-      for (var i = 0; i < uniqueBaseNames.length; i++) uniqueBaseNames[i]: i,
-    };
-
-    // Assign the group index to each file.
+    // Assign group indices based on the order of first appearance in the sorted file list
     for (final fileDetail in _files) {
       final baseName = _getBaseName(fileDetail.file.path);
+      if (!baseNameFirstIndexMap.containsKey(baseName)) {
+        baseNameFirstIndexMap[baseName] = groupIndex;
+        groupIndex++;
+      }
       _mergedNumberingCache[fileDetail.file.path] =
-          baseNameIndexMap[baseName] ?? 0;
+          baseNameFirstIndexMap[baseName] ?? 0;
     }
   }
 
@@ -944,6 +941,13 @@ class RenameProvider with ChangeNotifier {
   // 选择文件夹的方法
   Future<int> selectFolder() async {
     try {
+      // 在选择目录前请求权限
+      final bool isGranted = await _requestStoragePermission();
+      if (!isGranted) {
+        // 权限被拒绝，返回-1表示权限被拒绝
+        return -1;
+      }
+
       final String? folderPath = await FileSelectorService.selectDirectory();
       if (folderPath == null) return 0;
 
@@ -1033,6 +1037,28 @@ class RenameProvider with ChangeNotifier {
     }
   }
 
+  // 重新排序文件的方法
+  void reorderFiles(int oldIndex, int newIndex) {
+    if (oldIndex < 0 ||
+        oldIndex >= _files.length ||
+        newIndex < 0 ||
+        newIndex >= _files.length) {
+      return; // 索引无效，直接返回
+    }
+
+    // 移动文件
+    final item = _files.removeAt(oldIndex);
+    _files.insert(newIndex, item);
+
+    // 如果启用了mergeSameName功能，重新计算合并编号
+    if (_mergeSameName) {
+      _precalculateMergedNumbering();
+    }
+
+    // 通知监听器更新UI
+    notifyListeners();
+  }
+
   Future<Map<String, dynamic>> executeRename() async {
     _lastRenameLog.clear();
     _lastFailedFiles.clear();
@@ -1087,6 +1113,39 @@ class RenameProvider with ChangeNotifier {
         .map((e) => {'path': e.filePath ?? '', 'error': e.message})
         .toList();
 
+    // 更新文件列表中的文件路径为新名称
+    final renameLog = (result['renameLog'] as List)
+        .map((e) => Map<String, String>.from(e))
+        .toList();
+
+    // 创建旧路径到新路径的映射
+    final pathMap = <String, String>{};
+    for (final log in renameLog) {
+      pathMap[log['oldPath']!] = log['newPath']!;
+    }
+
+    // 更新_files列表中的文件路径
+    for (int i = 0; i < _files.length; i++) {
+      final oldPath = _files[i].file.path;
+      if (pathMap.containsKey(oldPath)) {
+        final newPath = pathMap[oldPath]!;
+        final newFile = File(newPath);
+        _files[i] = FileDetail(
+          file: newFile,
+          size: _files[i].size,
+          lastModified: _files[i].lastModified,
+        );
+        // 更新_addedFilePaths集合
+        _addedFilePaths.remove(oldPath);
+        _addedFilePaths.add(newPath);
+      }
+    }
+
+    // 如果启用了mergeSameName功能，重新计算合并编号
+    if (_mergeSameName) {
+      _precalculateMergedNumbering();
+    }
+
     notifyListeners();
     return {'success': result['success'], 'failed': result['failed']};
   }
@@ -1117,6 +1176,19 @@ class RenameProvider with ChangeNotifier {
       _precalculateMergedNumbering();
     }
     notifyListeners();
+  }
+
+  // 请求存储权限
+  Future<bool> _requestStoragePermission() async {
+    if (Platform.isAndroid) {
+      // 请求所有文件访问权限
+      final PermissionStatus status = await Permission.manageExternalStorage
+          .request();
+      return status.isGranted;
+    } else {
+      // 对于非安卓平台，默认拥有权限
+      return true;
+    }
   }
 
   // 内部排序实现

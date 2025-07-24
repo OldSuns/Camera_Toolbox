@@ -167,7 +167,21 @@ class _RenameScreenState extends State<RenameScreen>
                             onPressed: () async {
                               final duplicateCount = await renameProvider
                                   .selectFolder();
-                              _showDuplicateFilesSnackBar(duplicateCount);
+                              if (duplicateCount == -1) {
+                                // 权限被拒绝
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                        '存储权限被拒绝，无法访问文件夹中的文件。请在设置中授予存储权限后重试。',
+                                      ),
+                                      duration: Duration(seconds: 3),
+                                    ),
+                                  );
+                                }
+                              } else {
+                                _showDuplicateFilesSnackBar(duplicateCount);
+                              }
                             },
                             child: const Text('选择文件夹'),
                           ),
@@ -198,7 +212,21 @@ class _RenameScreenState extends State<RenameScreen>
                           onPressed: () async {
                             final duplicateCount = await renameProvider
                                 .selectFolder();
-                            _showDuplicateFilesSnackBar(duplicateCount);
+                            if (duplicateCount == -1) {
+                              // 权限被拒绝
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      '存储权限被拒绝，无法访问文件夹中的文件。请在设置中授予存储权限后重试。',
+                                    ),
+                                    duration: Duration(seconds: 3),
+                                  ),
+                                );
+                              }
+                            } else {
+                              _showDuplicateFilesSnackBar(duplicateCount);
+                            }
                           },
                           child: const Text('添加文件夹'),
                         ),
@@ -209,13 +237,16 @@ class _RenameScreenState extends State<RenameScreen>
                   Expanded(
                     child: DropTarget(
                       onDragDone: _handleDrop,
-                      child: ListView.builder(
+                      child: ReorderableListView.builder(
                         padding: const EdgeInsets.all(8),
                         itemCount: renameProvider.files.length,
                         itemBuilder: (context, index) {
                           final fileDetail = renameProvider.files[index];
                           final file = fileDetail.file;
                           return ListTile(
+                            key: ValueKey(
+                              file.path,
+                            ), // ReorderableListView需要唯一的key
                             title: Text(
                               file.path.split(Platform.pathSeparator).last,
                             ),
@@ -223,10 +254,10 @@ class _RenameScreenState extends State<RenameScreen>
                               renameProvider.previewRename(fileDetail, index),
                             ),
                             trailing: SizedBox(
-                              width: 120, // 限制trailing区域的最大宽度
+                              width: 120, // 保持宽度
                               child: Wrap(
-                                alignment: WrapAlignment.end, // 右对齐
-                                spacing: 8.0,
+                                alignment: WrapAlignment.end,
+                                spacing: 4.0,
                                 runSpacing: 4.0,
                                 crossAxisAlignment: WrapCrossAlignment.center,
                                 children: [
@@ -241,11 +272,15 @@ class _RenameScreenState extends State<RenameScreen>
                                     style: const TextStyle(fontSize: 12),
                                   ),
                                   IconButton(
-                                    padding: EdgeInsets.zero,
+                                    padding: const EdgeInsets.only(
+                                      left: 5.0,
+                                      right: 10.0,
+                                    ), // 删除按钮左右间距
                                     constraints: const BoxConstraints(),
                                     icon: const Icon(
                                       Icons.delete,
-                                      color: Colors.red,
+                                      color: Colors.grey, // 保持灰色
+                                      size: 24, // 删除按钮图标大小
                                     ),
                                     onPressed: () {
                                       renameProvider.removeFile(index);
@@ -255,6 +290,13 @@ class _RenameScreenState extends State<RenameScreen>
                               ),
                             ),
                           );
+                        },
+                        onReorder: (oldIndex, newIndex) {
+                          // 处理索引调整，因为ReorderableListView的newIndex可能需要调整
+                          if (newIndex > oldIndex) {
+                            newIndex -= 1;
+                          }
+                          renameProvider.reorderFiles(oldIndex, newIndex);
                         },
                       ),
                     ),
