@@ -46,16 +46,16 @@ class _AboutScreenState extends State<AboutScreen> {
     final scaffoldMessenger = ScaffoldMessenger.of(context);
 
     try {
-      log('正在检查更新...');
+      log('正在检查新Patch...');
       final status = await _updater.checkForUpdate();
       log('检查更新状态: $status');
 
       if (!mounted) return;
 
       if (status == UpdateStatus.outdated) {
-        log('发现新版本，正在下载...');
+        log('发现新补丁，正在下载...');
         scaffoldMessenger.showSnackBar(
-          const SnackBar(content: Text('发现新版本，正在下载...')),
+          const SnackBar(content: Text('发现新补丁，正在下载...')),
         );
         await _updater.update();
         log('更新下载完成');
@@ -65,7 +65,7 @@ class _AboutScreenState extends State<AboutScreen> {
       } else if (status == UpdateStatus.upToDate) {
         log('已是最新版本');
         scaffoldMessenger.showSnackBar(
-          const SnackBar(content: Text('已是最新版本。')),
+          const SnackBar(content: Text('已是最新版本或无法连接服务器。')),
         );
       } else if (status == UpdateStatus.unavailable) {
         log('Shorebird更新在当前环境不可用');
@@ -108,13 +108,14 @@ class _AboutScreenState extends State<AboutScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                '版本 1.0.6${_patchNumber == null ? '' : ' Patch $_patchNumber'}',
+                '版本 V1.0.6${_patchNumber == null ? '' : ' Patch $_patchNumber'}',
                 style: const TextStyle(fontSize: 16, color: Colors.grey),
               ),
               const SizedBox(height: 24),
               const Text(
-                '一款相机工具应用。由OldSun开发\n\n'
-                '基于Flutter+Dart',
+                '一款相机工具应用。由OldSun开发\n'
+                '基于Flutter+Dart\n\n'
+                '更新日志：V1.1.0 稳定性更新',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 16),
               ),
@@ -127,7 +128,7 @@ class _AboutScreenState extends State<AboutScreen> {
                         height: 20,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : const Text('检查更新'),
+                    : const Text('检查Patch'),
               ),
             ],
           ),
