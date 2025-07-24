@@ -65,7 +65,7 @@ class _AboutScreenState extends State<AboutScreen> {
       } else if (status == UpdateStatus.upToDate) {
         log('已是最新版本');
         scaffoldMessenger.showSnackBar(
-          const SnackBar(content: Text('已是最新版本或无法连接服务器。')),
+          const SnackBar(content: Text('已是最新版本。')),
         );
       } else if (status == UpdateStatus.unavailable) {
         log('Shorebird更新在当前环境不可用');
