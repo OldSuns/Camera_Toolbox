@@ -10,6 +10,7 @@ import '../quick_split/quick_split_screen.dart';
 import '../settings/settings_screen.dart';
 import '../about/about_screen.dart';
 import '../rename/rename_screen.dart';
+import '../camera_database/camera_database_screen.dart';
 
 /// 主页面框架
 class HomeScreen extends StatefulWidget {
@@ -26,6 +27,7 @@ class _HomeScreenState extends State<HomeScreen>
     const LocalPickerScreen(),
     const QuickSplitScreen(),
     const RenameScreen(),
+    const CameraDatabaseScreen(),
     const SettingsScreen(),
     const AboutScreen(),
   ];

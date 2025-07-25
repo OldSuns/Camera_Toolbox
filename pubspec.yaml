@@ -1,7 +1,7 @@
 name: oldsun_camera_toolbox
 description: "OldSun相机工具箱 - 一款功能强大的相机工具应用，专为摄影爱好者和专业摄影师设计"
 publish_to: 'none'
-version: 1.1.0+2
+version: 1.1.1+1
 
 environment:
   sdk: ^3.8.1
@@ -37,3 +37,4 @@ flutter:
   uses-material-design: true
   assets:
     - shorebird.yaml
+    - lib/data/camera_data/

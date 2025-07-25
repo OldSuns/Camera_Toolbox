@@ -16,6 +16,8 @@ graph TB
         LP[Local Picker]
         QS[Quick Split]
         TS[Theme System]
+        BR[Batch Rename]
+        CD[Camera Database]
     end
     
     subgraph "External Services"
@@ -37,6 +39,8 @@ graph TB
     LP --> BL
     QS --> BL
     TS --> BL
+    BR --> BL
+    CD --> BL
 ```
 
 ## 模块架构图
@@ -56,8 +60,10 @@ graph TD
         G --> H[ExifReaderScreen]
         G --> I[LocalPickerScreen]
         G --> J[QuickSplitScreen]
-        G --> K[SettingsScreen]
-        G --> L[AboutScreen]
+        G --> K[BatchRenameScreen]
+        G --> L[CameraDatabaseScreen]
+        G --> M[SettingsScreen]
+        G --> N[AboutScreen]
     end
 ```
 
@@ -106,7 +112,7 @@ sequenceDiagram
 
 **说明:**
 
-此图展示了“本地选片”功能的核心数据流，重点体现了**分页加载**和**多级缓存**机制。
+此图展示了"本地选片"功能的核心数据流，重点体现了**分页加载**和**多级缓存**机制。
 
 1.  **分页加载**:
     *   UI (`LocalPickerScreen`) 中的 `ScrollController` 监听用户滚动行为。
@@ -133,24 +139,34 @@ graph LR
     subgraph "Feature State"
         LPP[LocalPickerProvider]
         QSP[QuickSplitService]
+        BRP[RenameProvider]
+        CDP[CameraDatabaseViewModel]
     end
     
     subgraph "UI Components"
         UI1[ExifReaderScreen]
         UI2[LocalPickerScreen]
         UI3[QuickSplitScreen]
+        UI4[BatchRenameScreen]
+        UI5[CameraDatabaseScreen]
     end
     
     TP -.-> UI1
     TP -.-> UI2
     TP -.-> UI3
+    TP -.-> UI4
+    TP -.-> UI5
     
     NP -.-> UI1
     NP -.-> UI2
     NP -.-> UI3
+    NP -.-> UI4
+    NP -.-> UI5
     
     LPP --> UI2
     QSP --> UI3
+    BRP --> UI4
+    CDP --> UI5
 ```
 
 ## 并发处理架构
@@ -166,6 +182,7 @@ graph TD
         EXIF[EXIF Parser]
         THUMB[Thumbnail Generator]
         COPY[File Copier]
+        RENAME[Rename Worker]
     end
     
     subgraph "Shared Resources"
@@ -177,10 +194,12 @@ graph TD
     Provider --> EXIF
     Provider --> THUMB
     Provider --> COPY
+    Provider --> RENAME
     
     EXIF --> Cache
     THUMB --> Cache
     COPY --> Files
+    RENAME --> Files
 ```
 
 ## 错误处理流程
@@ -241,7 +260,7 @@ graph TD
 
 *   **内存缓存 (`Map<String, Uint8List>`)**:
     *   **目的**: 提供最快速的访问，避免任何I/O操作。
-    *   **生命周期**: 与 `LocalPickerProvider` 的生命周期绑定。当用户离开“本地选片”功能或应用关闭时，内存缓存被清空。
+    *   **生命周期**: 与 `LocalPickerProvider` 的生命周期绑定。当用户离开"本地选片"功能或应用关闭时，内存缓存被清空。
     *   **适用场景**: 用户在同一会话中反复滚动和查看图片。
 
 *   **磁盘缓存 (`.../cache/thumbnails/`)**:
@@ -317,4 +336,3 @@ graph LR
     PACKAGE --> WIN
     PACKAGE --> MAC
     PACKAGE --> LINUX
-```

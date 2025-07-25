@@ -2,150 +2,204 @@
 
 <img width="1472" height="986" alt="image" src="https://github.com/user-attachments/assets/e21f47bc-435e-4326-bfdd-9ba6b0a3f2f4" />
 
-## 项目概述
+**OldSun相机工具箱** 是一款专为摄影爱好者和专业摄影师设计的跨平台桌面应用。它提供了一系列实用工具，旨在简化您的照片管理和处理工作流程。
 
-**OldSun相机工具箱** 是一款专为摄影爱好者和专业摄影师设计的跨平台桌面应用，提供图片管理、EXIF信息读取、RAW文件分片等功能。
+## ✨ 功能特性
 
-### 核心功能模块
-
-#### 1. 本地选片 (Local Picker)
-- **功能描述**: 从本地文件夹批量选择、预览和管理图片
+### 1. EXIF信息读取器
+- **功能描述**: 轻松查看照片的详细EXIF元数据，支持多种RAW格式。
 - **核心特性**:
-  - 支持JPG、PNG、HEIC等常见格式
-  - 缩略图生成与缓存
-  - 批量选择与导出
-  - 键盘快捷键支持 (F键选择，方向键导航)
-  - RAW文件关联检测
-- **技术亮点**:
-  - 使用Isolate进行缩略图生成，避免UI卡顿
-  - 响应式网格布局，支持缩略图大小调节
-  - 大图查看器支持缩放和平移
+  - **广泛的格式支持**: 支持JPG、PNG、HEIC等常见格式，以及CR2、CR3、NEF、ARW、DNG等多种RAW文件格式。
+  - **详细信息展示**: 展示包括相机型号、镜头信息、快门速度、光圈、ISO、拍摄日期、GPS坐标等在内的详细EXIF信息。
+  - **中文标签翻译**: 将EXIF标签翻译成中文，方便用户理解。
+  - **缩略图提取**: 智能提取RAW文件中的嵌入式缩略图，提高加载速度。
+  - **一键分享**: 方便地将EXIF信息复制到剪贴板，与他人分享。
 
-#### 2. EXIF信息读取器 (Exif Reader)
-- **功能描述**: 读取并展示图片的详细EXIF元数据
+### 2. 本地选片
+- **功能描述**: 批量预览、选择和导出照片，支持多种常见格式。
 - **核心特性**:
-  - 支持多种图片格式包括RAW文件
-  - 中文标签翻译
-  - 缩略图提取
-  - GPS坐标解析
-  - 一键分享EXIF信息
-- **技术亮点**:
-  - 使用Isolate处理大文件，避免主线程阻塞
-  - 智能缩略图提取算法
-  - 错误处理和降级显示
+  - **高效的图片加载**: 采用分页加载和多级缓存机制，即使在处理大量图片时也能保持流畅。
+  - **灵活的选择操作**: 支持全选、全不选、反选等多种选择操作。
+  - **大图查看器**: 支持缩放、平移和键盘快捷键（F键选择，方向键导航），方便用户查看和筛选照片。
+  - **RAW文件关联检测**: 自动检测与JPG文件同名的RAW文件，方便用户管理。
+  - **批量导出**: 将选中的照片批量导出到指定目录。
 
-#### 3. 快速分片 (Quick Split)
-- **功能描述**: 根据JPG文件自动匹配并拷贝同名RAW文件
+### 3. 快速分片
+- **功能描述**: 根据JPG文件自动匹配并拷贝同名RAW文件。
 - **核心特性**:
-  - 支持多种RAW格式 (CR2, CR3, NEF, ARW, DNG等)
-  - 文件名精确匹配
-  - 冲突处理策略 (跳过、重命名、覆盖)
-  - 批量处理进度显示
-- **技术亮点**:
-  - 使用Isolate进行文件操作，避免UI冻结
-  - 智能文件冲突检测和处理
-  - 跨平台权限管理
+  - **智能匹配**: 自动匹配文件名相同但扩展名不同的JPG和RAW文件。
+  - **冲突处理**: 提供跳过、重命名、覆盖三种冲突处理策略。
+  - **批量处理**: 支持批量处理，并提供进度显示。
 
-#### 4. 批量重命名 (Batch Rename)
-- **功能描述**: 提供多种策略批量修改文件名
+### 4. 批量重命名
+- **功能描述**: 提供多种策略批量修改文件名。
 - **核心特性**:
-  - **替换**: 查找并替换文件名中的特定字符。
-  - **追加**: 在文件名前、后或指定位置添加字符。
-  - **自动序号**: 按指定格式（前缀、后缀、起始号、位数）生成递增序号。
-  - **EXIF命名**: 使用照片的EXIF信息（如拍摄日期、相机型号）命名。
-  - **实时预览**: 在执行前显示命名效果。
+  - **多种策略**: 支持替换、追加、自动序号和EXIF命名四种策略。
+  - **实时预览**: 在执行前实时预览重命名效果。
   - **灵活排序**: 支持按名称、时间等多种方式对文件排序。
+  - **文件拖放**: 支持拖放文件到应用中。
+  - **文件夹选择**: 支持选择整个文件夹中的文件。
+  - **撤销功能**: 支持撤销上一次重命名操作。
+  - **同名合并**: 在自动序号和EXIF命名时避免重复文件名。
 
-#### 5. 主题系统
-- **功能描述**: 支持浅色/深色/系统主题切换
+### 5. 相机数据
+- **功能描述**: 内置相机数据库，方便查询和对比不同型号的相机规格。数据来源：[leavestylecode/CameraDatabase](https://github.com/leavestylecode/CameraDatabase)。
 - **核心特性**:
-  - Material 3设计风格
-  - 自定义主题色
-  - 跨平台字体适配
-  - 主题配置持久化
+  - **级联选择器**: 快速定位相机品牌和型号。
+  - **结构化展示**: 以清晰的结构展示相机的关键规格参数。
+  - **离线访问**: 基于项目内置的JSON数据源，无需联网。
+  - **相机对比**: 支持双列并排比较不同型号的相机。
 
-## 技术栈
+### 6. 主题系统
+- **功能描述**: 支持浅色、深色和系统主题切换。
+- **核心特性**:
+  - **Material 3设计**: 采用最新的Material 3设计风格。
+  - **自定义主题色**: 支持自定义主题色，满足个性化需求。
+  - **跨平台字体适配**: 自动适配不同平台的字体，提供一致的视觉体验。
+  - **持久化存储**: 主题配置会自动保存，下次打开应用时无需重新设置。
 
-- **框架**: Flutter 3.8.1+
-- **语言**: Dart
-- **状态管理**: Provider + ChangeNotifier
-- **UI框架**: Material 3
-- **平台支持**: Windows, macOS, Linux, Android, iOS, Web
+## 🚀 技术亮点
 
-## 核心依赖
+- **跨平台**: 基于Flutter框架，支持Windows、macOS和Linux。
+- **高性能**: 使用Isolate进行计算密集型和IO密集型操作，如EXIF解析、缩略图生成、文件拷贝和重命名，确保UI流畅。
+- **多级缓存**: 采用内存和磁盘两级缓存策略，优化缩略图加载性能，减少不必要的计算和IO操作。
+- **响应式设计**: 自动适应不同屏幕尺寸和平台特性，提供一致的用户体验。
+- **状态管理**: 使用Provider + ChangeNotifier进行状态管理，实现清晰的数据流和高效的UI更新。
+- **错误处理**: 采用分层错误处理策略，提供用户友好的错误提示和详细的日志记录。
 
-- `exif_reader`: EXIF信息读取
-- `image`: 图片处理
-- `file_picker`: 文件选择
-- `window_manager`: 桌面窗口管理
-- `shared_preferences`: 本地存储
-- `provider`: 状态管理
+## 🛠️ 架构概览
 
-## 安装和运行
+### 分层架构
 
-### 环境要求
+```mermaid
+graph TD
+    subgraph "表示层 (UI Layer)"
+        A["Screens & Widgets"]
+    end
 
-- Flutter 3.8.1+
-- Dart 2.19+
-- 支持的平台: Windows, macOS, Linux, Android, iOS, Web
+    subgraph "业务逻辑层 (Business Logic Layer)"
+        B["Providers (State Management)"]
+        C["Services (Business Logic)"]
+    end
 
-### 安装步骤
+    subgraph "数据访问层 (Data Access Layer)"
+        D["File System"]
+        E["EXIF Parser"]
+        F["Image Processor"]
+        G["Shared Preferences"]
+    end
 
-1. 克隆项目代码:
-   ```bash
-   git clone <repository-url>
-   cd camera_toolbox
-   ```
+    A --> B
+    B --> C
+    C --> D
+    C --> E
+    C --> F
+    C --> G
+```
 
-2. 安装依赖:
-   ```bash
-   flutter pub get
-   ```
+### 状态管理
 
-3. 运行应用:
-   ```bash
-   flutter run
-   ```
+```mermaid
+graph LR
+    subgraph "全局状态"
+        A["ThemeProvider"]
+        B["NavigationProvider"]
+    end
 
-### 构建发布版本
+    subgraph "功能状态"
+        C["LocalPickerProvider"]
+        D["RenameProvider"]
+        E["CameraDatabaseViewModel"]
+    end
 
-- **Windows**:
-  ```bash
-  flutter build windows
-  ```
+    subgraph "UI"
+        F["HomeScreen"]
+        G["LocalPickerScreen"]
+        H["RenameScreen"]
+        I["CameraDatabaseScreen"]
+    end
 
-- **macOS**:
-  ```bash
-  flutter build macos
-  ```
+    A --> F
+    B --> F
+    C --> G
+    D --> H
+    E --> I
+```
 
-- **Linux**:
-  ```bash
-  flutter build linux
-  ```
+### 并发处理
 
-- **Android**:
-  ```bash
-  flutter build apk
-  ```
+```mermaid
+graph TD
+    subgraph "主Isolate"
+        A["UI线程"]
+        B["Provider"]
+    end
 
-- **iOS**:
-  ```bash
-  flutter build ios
-  ```
+    subgraph "工作Isolate"
+        C["EXIF解析"]
+        D["缩略图生成"]
+        E["文件拷贝"]
+        F["批量重命名"]
+    end
 
-- **Web**:
-  ```bash
-  flutter build web
-  ```
+    A --> B
+    B --> C
+    B --> D
+    B --> E
+    B --> F
+```
 
+### 数据流 (本地选片)
 
-## 目标用户
+```mermaid
+sequenceDiagram
+    participant User
+    participant Screen
+    participant Provider
+    participant Isolate
+    participant Cache
+    participant FileSystem
 
-- **摄影爱好者**: 需要管理大量照片，查看拍摄参数
-- **专业摄影师**: 需要批量处理RAW文件，管理拍摄项目
-- **摄影学习者**: 学习不同拍摄参数的效果
+    User->>Screen: 滚动列表
+    Screen->>Provider: loadMoreImages()
+    Provider->>FileSystem: list().skip().take()
+    FileSystem-->>Provider: 图片路径列表
+    Provider->>Provider: 更新imagePaths
+    Provider-->>Screen: 刷新UI
 
-## 贡献
+    loop 每个图片
+        Screen->>Provider: getThumbnail(path)
+        Provider->>Cache: 检查内存缓存
+        alt 内存缓存命中
+            Cache-->>Provider: 返回缩略图
+            Provider-->>Screen: 显示缩略图
+        else 内存缓存未命中
+            Provider->>Cache: 检查磁盘缓存
+            alt 磁盘缓存命中
+                Cache-->>Provider: 读取文件，返回缩略图
+                Provider->>Cache: 存入内存缓存
+                Provider-->>Screen: 显示缩略图
+            else 磁盘缓存未命中
+                Provider->>Isolate: 请求生成缩略图
+                Isolate->>FileSystem: 读取原图
+                Isolate->>Isolate: 生成缩略图
+                Isolate->>Cache: 写入磁盘缓存
+                Isolate-->>Provider: 返回缩略图
+                Provider->>Cache: 存入内存缓存
+                Provider-->>Screen: 显示缩略图
+            end
+        end
+    end
+```
 
-欢迎提交 Issue 和 Pull Request 来帮助改进项目。
+## 📦 安装与使用
+
+访问我们的 [GitHub Releases](https://github.com/OldSuns/Camera_Toolbox/releases) 页面，下载适用于您操作系统的最新版本。
+
+## 🤝 贡献
+
+我们欢迎任何形式的贡献！如果您有任何建议或问题，请随时提交 [Issue](https://github.com/OldSuns/Camera_Toolbox/issues) 或 [Pull Request](https://github.com/OldSuns/Camera_Toolbox/pulls)。
+
+## 📄 许可证
+
+本项目采用 [MIT](https://opensource.org/licenses/MIT) 许可证。

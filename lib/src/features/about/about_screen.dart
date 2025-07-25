@@ -142,14 +142,14 @@ class _AboutScreenState extends State<AboutScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                '版本 V1.1.0${_patchNumber == null ? '' : ' Patch $_patchNumber'}',
+                '版本 V1.1.1${_patchNumber == null ? '' : ' Patch $_patchNumber'}',
                 style: const TextStyle(fontSize: 16, color: Colors.grey),
               ),
               const SizedBox(height: 24),
               const Text(
                 '一款相机工具应用。由OldSun开发\n'
                 '基于Flutter+Dart\n\n'
-                '更新日志：V1.1.0 稳定性更新',
+                '更新日志：V1.1.1 新增“相机数据”查询功能',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 16),
               ),
