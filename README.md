@@ -199,7 +199,3 @@ sequenceDiagram
 ## 🤝 贡献
 
 我们欢迎任何形式的贡献！如果您有任何建议或问题，请随时提交 [Issue](https://github.com/OldSuns/Camera_Toolbox/issues) 或 [Pull Request](https://github.com/OldSuns/Camera_Toolbox/pulls)。
-
-## 📄 许可证
-
-本项目采用 [MIT](https://opensource.org/licenses/MIT) 许可证。
