@@ -2,6 +2,7 @@ import 'dart:developer';
 
 import 'package:flutter/material.dart';
 import 'package:shorebird_code_push/shorebird_code_push.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 /// 关于页面
 class AboutScreen extends StatefulWidget {
@@ -33,6 +34,25 @@ class _AboutScreenState extends State<AboutScreen> {
       }
     } catch (error, stackTrace) {
       log('获取当前补丁失败', error: error, stackTrace: stackTrace);
+      // 打开浏览器跳转到指定网页
+      final uri = Uri.parse('https://github.com/OldSuns/Camera_Toolbox');
+      if (await launchUrl(uri)) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('已在浏览器中打开项目主页')));
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                '无法打开浏览器，请手动访问 https://github.com/OldSuns/Camera_Toolbox',
+              ),
+            ),
+          );
+        }
+      }
     }
   }
 
@@ -64,14 +84,25 @@ class _AboutScreenState extends State<AboutScreen> {
         );
       } else if (status == UpdateStatus.upToDate) {
         log('已是最新版本');
-        scaffoldMessenger.showSnackBar(
-          const SnackBar(content: Text('已是最新版本。')),
-        );
+        // 打开浏览器跳转到指定网页
+        final uri = Uri.parse('https://github.com/OldSuns/Camera_Toolbox');
+        if (await launchUrl(uri)) {
+          scaffoldMessenger.showSnackBar(
+            const SnackBar(content: Text('已在浏览器中打开项目主页')),
+          );
+        } else {
+          scaffoldMessenger.showSnackBar(
+            const SnackBar(content: Text('已是最新版本。')),
+          );
+        }
       } else if (status == UpdateStatus.unavailable) {
         log('Shorebird更新在当前环境不可用');
         scaffoldMessenger.showSnackBar(
           const SnackBar(content: Text('更新功能仅在通过Shorebird构建的应用中可用。')),
         );
+        // 打开浏览器跳转到指定网页
+        final uri = Uri.parse('https://github.com/OldSuns/Camera_Toolbox');
+        await launchUrl(uri);
       }
     } on UpdateException catch (error, stackTrace) {
       log('更新失败', error: error, stackTrace: stackTrace);
@@ -81,6 +112,9 @@ class _AboutScreenState extends State<AboutScreen> {
       scaffoldMessenger.showSnackBar(
         SnackBar(content: Text('检查更新时发生未知错误: $error')),
       );
+      // 打开浏览器跳转到指定网页
+      final uri = Uri.parse('https://github.com/OldSuns/Camera_Toolbox');
+      await launchUrl(uri);
     } finally {
       if (mounted) {
         setState(() {
@@ -128,7 +162,7 @@ class _AboutScreenState extends State<AboutScreen> {
                         height: 20,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : const Text('检查Patch'),
+                    : const Text('检查更新'),
               ),
             ],
           ),
