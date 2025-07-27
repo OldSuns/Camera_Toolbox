@@ -199,3 +199,7 @@ sequenceDiagram
 ## 🤝 贡献
 
 我们欢迎任何形式的贡献！如果您有任何建议或问题，请随时提交 [Issue](https://github.com/OldSuns/Camera_Toolbox/issues) 或 [Pull Request](https://github.com/OldSuns/Camera_Toolbox/pulls)。
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=OldSuns/Camera_Toolbox&type=Date)](https://www.star-history.com/#OldSuns/Camera_Toolbox&Date)
