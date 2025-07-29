@@ -121,7 +121,7 @@ class _CameraToolboxAppState extends State<CameraToolboxApp>
 
         // 主题加载完成后，构建MaterialApp。
         return MaterialApp(
-          title: 'OldSun相机工具箱',
+          title: '相机工具箱',
           debugShowCheckedModeBanner: false, // 隐藏调试横幅
           theme: themeProvider.lightTheme.copyWith(
             textTheme: themeProvider.lightTheme.textTheme.apply(
