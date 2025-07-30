@@ -142,7 +142,7 @@ class _AboutScreenState extends State<AboutScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                '版本 V1.1.1${_patchNumber == null ? '' : ' Patch $_patchNumber'}',
+                '版本 V1.1.2${_patchNumber == null ? '' : ' Patch $_patchNumber'}',
                 style: const TextStyle(fontSize: 16, color: Colors.grey),
               ),
               const SizedBox(height: 24),
