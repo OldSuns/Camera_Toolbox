@@ -149,7 +149,7 @@ class _AboutScreenState extends State<AboutScreen> {
               const Text(
                 '一款相机工具应用。由OldSun开发\n'
                 '基于Flutter+Dart\n\n'
-                '更新日志：V1.1.1 新增“相机数据”查询功能',
+                '更新日志：V1.1.2 优化“本地选片”功能缩略图生成速度',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 16),
               ),

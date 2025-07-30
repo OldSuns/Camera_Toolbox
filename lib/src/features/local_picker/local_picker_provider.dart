@@ -26,6 +26,12 @@ class _ThumbnailResult {
   _ThumbnailResult(this.path, this.bytes, this.cacheKey);
 }
 
+/// 批量缩略图生成请求
+class _BatchThumbnailRequest {
+  final List<_ThumbnailRequest> requests;
+  _BatchThumbnailRequest(this.requests);
+}
+
 /// The entry point for the isolate.
 void _thumbnailGenerator(SendPort sendPort) {
   final receivePort = ReceivePort();
@@ -33,29 +39,52 @@ void _thumbnailGenerator(SendPort sendPort) {
 
   receivePort.listen((dynamic message) async {
     if (message is _ThumbnailRequest) {
-      try {
-        final fileBytes = await File(message.path).readAsBytes();
-        final image = img.decodeImage(fileBytes);
-        if (image != null) {
-          final thumbnail = img.copyResize(image, width: message.width);
-          final jpgBytes = Uint8List.fromList(
-            img.encodeJpg(thumbnail, quality: 80),
-          );
-
-          // Save to disk cache
-          final cacheFile = File(message.cachePath);
-          // The directory is already created on startup.
-          await cacheFile.writeAsBytes(jpgBytes);
-          final cacheKey = p.basename(cacheFile.path);
-          sendPort.send(_ThumbnailResult(message.path, jpgBytes, cacheKey));
-        }
-      } catch (e) {
-        // Send null back to indicate failure
-        debugPrint('Error in isolate for ${message.path}: $e');
-        sendPort.send(_ThumbnailResult(message.path, Uint8List(0), ''));
+      await _processSingleThumbnail(message, sendPort);
+    } else if (message is _BatchThumbnailRequest) {
+      // 批量处理缩略图，减少Isolate通信开销
+      for (final request in message.requests) {
+        await _processSingleThumbnail(request, sendPort);
       }
     }
   });
+}
+
+/// 处理单个缩略图生成
+Future<void> _processSingleThumbnail(
+  _ThumbnailRequest message,
+  SendPort sendPort,
+) async {
+  try {
+    final fileBytes = await File(message.path).readAsBytes();
+    final image = img.decodeImage(fileBytes);
+    if (image != null) {
+      // 使用线性插值算法，平衡质量和速度
+      final thumbnail = img.copyResize(
+        image,
+        width: message.width,
+        interpolation: img.Interpolation.linear,
+      );
+
+      // 保持80%质量
+      final jpgBytes = Uint8List.fromList(
+        img.encodeJpg(thumbnail, quality: 80),
+      );
+
+      // 异步写入磁盘，不阻塞处理
+      final cacheFile = File(message.cachePath);
+      unawaited(cacheFile.writeAsBytes(jpgBytes));
+      final cacheKey = p.basename(cacheFile.path);
+      sendPort.send(_ThumbnailResult(message.path, jpgBytes, cacheKey));
+    }
+  } catch (e) {
+    debugPrint('Error in isolate for ${message.path}: $e');
+    sendPort.send(_ThumbnailResult(message.path, Uint8List(0), ''));
+  }
+}
+
+/// 不等待异步操作完成的辅助函数
+void unawaited(Future<void> future) {
+  // 故意不等待，让操作在后台进行
 }
 
 class LocalPickerProvider with ChangeNotifier {
@@ -64,7 +93,7 @@ class LocalPickerProvider with ChangeNotifier {
   String? _currentDirectory;
   bool _hasMore = true;
   bool get hasMore => _hasMore;
-  final int _pageSize = 50;
+  final int _pageSize = 100;
 
   Map<String, Uint8List> get thumbnailCache => _thumbnailCache;
   final Map<String, Uint8List> _thumbnailCache = {};
@@ -97,19 +126,42 @@ class LocalPickerProvider with ChangeNotifier {
   double _exportProgress = 0.0;
   double get exportProgress => _exportProgress;
 
-  Isolate? _isolate;
-  SendPort? _sendPort;
-  final _receivePort = ReceivePort();
-  Completer<SendPort> _sendPortCompleter = Completer<SendPort>();
+  // 多Isolate池优化 - 根据CPU核心数动态调整
+  final List<Isolate?> _isolates = [];
+  final List<SendPort?> _sendPorts = [];
+  final List<ReceivePort> _receivePorts = [];
+  final List<Completer<SendPort>> _sendPortCompleters = [];
 
   int _processingCount = 0;
-  final int _maxConcurrent = 6;
+  late final int _maxConcurrent; // 根据CPU核心数动态设置
+  late final int _isolateCount; // 根据CPU核心数动态设置
   final List<_ThumbnailRequest> _requestQueue = [];
   final Set<String> _pendingGeneration = {};
+  int _currentIsolateIndex = 0; // 轮询使用Isolate
+
+  // 批量处理优化
+  final int _batchSize = 3; // 减少批量大小，提高响应性
+  Timer? _batchTimer;
 
   LocalPickerProvider() {
-    _initIsolate();
+    _initCpuBasedSettings();
+    _initIsolates();
     _initCacheDir();
+  }
+
+  /// 根据CPU核心数初始化设置
+  void _initCpuBasedSettings() {
+    final cpuCores = Platform.numberOfProcessors;
+
+    // Isolate数量 = CPU核心数 / 2，最少1个，最多6个
+    _isolateCount = (cpuCores / 2).ceil().clamp(1, 6);
+
+    // 最大并发数 = CPU核心数 - 1，最少2个，最多12个
+    _maxConcurrent = (cpuCores - 1).clamp(2, 12);
+
+    debugPrint(
+      'CPU核心数: $cpuCores, Isolate数量: $_isolateCount, 最大并发数: $_maxConcurrent',
+    );
   }
 
   Future<void> _initCacheDir() async {
@@ -137,44 +189,65 @@ class LocalPickerProvider with ChangeNotifier {
     return '${md5.convert(utf8.encode(path)).toString()}.jpg';
   }
 
-  void _initIsolate() async {
-    _isolate = await Isolate.spawn(_thumbnailGenerator, _receivePort.sendPort);
-    _receivePort.listen((dynamic message) {
-      if (message is SendPort) {
-        _sendPort = message;
-        if (!_sendPortCompleter.isCompleted) {
-          _sendPortCompleter.complete(message);
-        }
-      } else if (message is _ThumbnailResult) {
-        _processingCount--;
-        _pendingGeneration.remove(message.path);
+  /// 初始化多个Isolate
+  void _initIsolates() async {
+    for (int i = 0; i < _isolateCount; i++) {
+      final receivePort = ReceivePort();
+      final completer = Completer<SendPort>();
 
-        if (message.bytes.isNotEmpty) {
-          _thumbnailCache[message.path] = message.bytes;
-          if (message.cacheKey.isNotEmpty) {
-            _diskCacheIndex.add(message.cacheKey);
+      _receivePorts.add(receivePort);
+      _sendPortCompleters.add(completer);
+      _isolates.add(null);
+      _sendPorts.add(null);
+
+      final isolate = await Isolate.spawn(
+        _thumbnailGenerator,
+        receivePort.sendPort,
+      );
+      _isolates[i] = isolate;
+
+      receivePort.listen((dynamic message) {
+        if (message is SendPort) {
+          _sendPorts[i] = message;
+          if (!_sendPortCompleters[i].isCompleted) {
+            _sendPortCompleters[i].complete(message);
           }
+        } else if (message is _ThumbnailResult) {
+          _processingCount--;
+          _pendingGeneration.remove(message.path);
+
+          if (message.bytes.isNotEmpty) {
+            _thumbnailCache[message.path] = message.bytes;
+            if (message.cacheKey.isNotEmpty) {
+              _diskCacheIndex.add(message.cacheKey);
+            }
+          }
+          _processNextRequest();
+          notifyListeners();
         }
-        // Even if it failed, we process the next one
-        _processNextRequest();
-        notifyListeners();
-      }
-    });
+      });
+    }
   }
 
   @override
   void dispose() {
-    _isolate?.kill(priority: Isolate.immediate);
-    _isolate = null;
+    _batchTimer?.cancel();
+    for (final isolate in _isolates) {
+      isolate?.kill(priority: Isolate.immediate);
+    }
+    _isolates.clear();
     super.dispose();
   }
 
-  Future<void> _resetIsolate() async {
-    _isolate?.kill(priority: Isolate.immediate);
-    _isolate = null;
-    _sendPort = null;
-    _sendPortCompleter = Completer<SendPort>();
-    _isolate = await Isolate.spawn(_thumbnailGenerator, _receivePort.sendPort);
+  Future<void> _resetIsolates() async {
+    for (final isolate in _isolates) {
+      isolate?.kill(priority: Isolate.immediate);
+    }
+    _isolates.clear();
+    _sendPorts.clear();
+    _receivePorts.clear();
+    _sendPortCompleters.clear();
+    _initIsolates();
   }
 
   void setLoading(bool value) {
@@ -204,34 +277,45 @@ class LocalPickerProvider with ChangeNotifier {
     }
   }
 
-  void precacheAdjacentImages(BuildContext context) {
+  void precacheAdjacentImages(
+    BuildContext context, {
+    bool isScrolling = false,
+  }) {
     if (_imagePaths.isEmpty) return;
 
-    // Precache the next 3 images to improve performance.
-    for (int i = 1; i <= 3; i++) {
+    final precacheCount = isScrolling ? 3 : 6;
+
+    for (int i = 1; i <= precacheCount; i++) {
       final nextIndex = _currentImageIndex + i;
       if (nextIndex < _imagePaths.length) {
-        precacheImage(FileImage(File(_imagePaths[nextIndex])), context);
+        precacheImage(
+          FileImage(File(_imagePaths[nextIndex])),
+          context,
+          onError: (exception, stackTrace) {
+            debugPrint(
+              'Failed to precache image at index $nextIndex: $exception',
+            );
+          },
+        );
       }
     }
   }
 
   Future<void> selectFolder() async {
     setLoading(true);
-    await _resetIsolate();
+    await _resetIsolates();
     _imagePaths.clear();
     _selectedImagePaths.clear();
     _thumbnailCache.clear();
     _currentDirectory = null;
     _hasMore = true;
     _totalImageCount = 0;
-    notifyListeners(); // Update UI to clear old images
+    notifyListeners();
 
     try {
       final selectedDirectory = await FilePicker.platform.getDirectoryPath();
       if (selectedDirectory != null) {
         _currentDirectory = selectedDirectory;
-        // Don't await this, let it run in the background
         _calculateTotalImageCount();
         await _loadMoreImages();
       }
@@ -273,9 +357,7 @@ class LocalPickerProvider with ChangeNotifier {
       }
 
       _imagePaths.addAll(files);
-      // First, trigger generation for thumbnails that don't exist at all.
       await _regenerateThumbnails();
-      // Then, pre-warm the memory cache with thumbnails that are already on disk.
       _prewarmCache(files);
       notifyListeners();
     } catch (e) {
@@ -295,9 +377,6 @@ class LocalPickerProvider with ChangeNotifier {
   }
 
   void selectAll() {
-    // This should select all images in the folder, not just loaded ones.
-    // For now, the simplest implementation is to just select all loaded.
-    // A more complex implementation would require loading all paths first.
     _selectedImagePaths.addAll(_imagePaths);
     notifyListeners();
   }
@@ -316,43 +395,58 @@ class LocalPickerProvider with ChangeNotifier {
 
     // 2. Check if currently being generated
     if (_pendingGeneration.contains(path)) {
-      return null; // Will be updated later
+      return null;
     }
 
     // 3. Check disk cache index (no I/O)
     final cacheKey = _getCacheKeyForPath(path);
     if (!_diskCacheIndex.contains(cacheKey)) {
       _cacheMissCount++;
+      _queueThumbnailGeneration(path);
       return null;
     }
 
-    // 4. Read from disk (I/O)
+    // 4. 异步读取磁盘缓存
+    _loadFromDiskCache(path);
+    return null;
+  }
+
+  /// 异步加载磁盘缓存
+  Future<void> _loadFromDiskCache(String path) async {
     final cacheFile = _getCacheFileForPath(path);
     _diskReadCount++;
     try {
       final bytes = await cacheFile.readAsBytes();
       if (bytes.isEmpty) {
-        // File is empty/corrupt, remove from index and delete
+        final cacheKey = _getCacheKeyForPath(path);
         _diskCacheIndex.remove(cacheKey);
         await cacheFile.delete();
         _cacheMissCount++;
-        return null;
+        return;
       }
-      // Load into memory cache and return
       _thumbnailCache[path] = bytes;
       _cacheHitCount++;
-      return bytes;
+      notifyListeners();
     } catch (e) {
       debugPrint('Error reading cache file for $path: $e. Deleting.');
+      final cacheKey = _getCacheKeyForPath(path);
       _diskCacheIndex.remove(cacheKey);
       await cacheFile.delete();
       _cacheMissCount++;
-      return null;
     }
   }
 
+  /// 队列缩略图生成请求
+  void _queueThumbnailGeneration(String path) {
+    if (_pendingGeneration.contains(path)) return;
+
+    final cacheFile = _getCacheFileForPath(path);
+    final request = _ThumbnailRequest(path, 300, cacheFile.path);
+    _requestQueue.add(request);
+    _processNextRequest();
+  }
+
   Future<void> _prewarmCache(List<String> pathsToPrewarm) async {
-    // This runs in the background, not awaited, to not block the UI.
     for (final path in pathsToPrewarm) {
       if (!_thumbnailCache.containsKey(path)) {
         final cacheKey = _getCacheKeyForPath(path);
@@ -362,15 +456,12 @@ class LocalPickerProvider with ChangeNotifier {
             final bytes = await cacheFile.readAsBytes();
             if (bytes.isNotEmpty) {
               _thumbnailCache[path] = bytes;
-              // Optional: notifyListeners() here if you want to see pre-warmed images appear live.
-              // But it might cause too many rebuilds.
             }
           } catch (e) {
-            // Ignore errors, the file might be corrupt.
+            // Ignore errors
           }
         }
       }
-      // Yield to the event loop to keep the UI responsive.
       await Future.delayed(Duration.zero);
     }
   }
@@ -389,35 +480,54 @@ class LocalPickerProvider with ChangeNotifier {
   }
 
   Future<void> _regenerateThumbnails() async {
-    _sendPort ??= await _sendPortCompleter.future;
     if (_cacheDir == null) await _initCacheDir();
 
-    const width = 300;
-    for (final imagePath in _imagePaths) {
+    for (int i = 0; i < _imagePaths.length; i++) {
+      final imagePath = _imagePaths[i];
       if (!_thumbnailCache.containsKey(imagePath) &&
           !_pendingGeneration.contains(imagePath)) {
         final cacheKey = _getCacheKeyForPath(imagePath);
         if (!_diskCacheIndex.contains(cacheKey)) {
-          final cacheFile = _getCacheFileForPath(imagePath);
-          _requestQueue.add(
-            _ThumbnailRequest(imagePath, width, cacheFile.path),
-          );
+          _queueThumbnailGeneration(imagePath);
+        } else {
+          _loadFromDiskCache(imagePath);
         }
       }
     }
-    _processNextRequest();
   }
 
+  /// 优化的请求处理：支持批量处理和多Isolate
   void _processNextRequest() {
     if (_requestQueue.isEmpty || _processingCount >= _maxConcurrent) {
       return;
     }
 
-    while (_processingCount < _maxConcurrent && _requestQueue.isNotEmpty) {
+    // 批量处理优化：收集多个请求一起发送
+    final batchRequests = <_ThumbnailRequest>[];
+    while (batchRequests.length < _batchSize &&
+        _requestQueue.isNotEmpty &&
+        _processingCount < _maxConcurrent) {
       final request = _requestQueue.removeAt(0);
+      batchRequests.add(request);
       _pendingGeneration.add(request.path);
       _processingCount++;
-      _sendPort!.send(request);
+    }
+
+    if (batchRequests.isNotEmpty) {
+      // 轮询选择Isolate
+      final isolateIndex = _currentIsolateIndex % _isolateCount;
+      _currentIsolateIndex++;
+
+      // 等待SendPort准备好
+      _sendPortCompleters[isolateIndex].future.then((sendPort) {
+        if (batchRequests.length == 1) {
+          // 单个请求直接发送
+          sendPort.send(batchRequests.first);
+        } else {
+          // 多个请求批量发送
+          sendPort.send(_BatchThumbnailRequest(batchRequests));
+        }
+      });
     }
   }
 
@@ -445,7 +555,6 @@ class LocalPickerProvider with ChangeNotifier {
           await imageFile.copy(newPath);
           i++;
           _exportProgress = i / _selectedImagePaths.length;
-          // Only notify listeners for progress, not for every file
           if (i % 5 == 0 || i == _selectedImagePaths.length) {
             notifyListeners();
           }
@@ -469,35 +578,23 @@ class LocalPickerProvider with ChangeNotifier {
     if (_rawFileStatus.containsKey(currentImagePath)) return;
 
     const rawExtensions = [
-      // Canon
-      '.CR2', '.CR3',
-      // Nikon
+      '.CR2',
+      '.CR3',
       '.NEF',
-      // Sony
       '.ARW',
-      // Adobe
       '.DNG',
-      // Fujifilm
       '.RAF',
-      // Panasonic
       '.RW2',
-      // Olympus
       '.ORF',
-      // Pentax
       '.PEF',
-      // Samsung
       '.SRW',
-      // GoPro
       '.GPR',
-      // Hasselblad
-      '.3FR', '.FFF',
-      // Kodak
-      '.DCR', '.KDC',
-      // Minolta
+      '.3FR',
+      '.FFF',
+      '.DCR',
+      '.KDC',
       '.MRW',
-      // Leaf
       '.MOS',
-      // Sigma
       '.X3F',
     ];
     final fileDirectory = p.dirname(currentImagePath);
