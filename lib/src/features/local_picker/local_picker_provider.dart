@@ -30,20 +30,22 @@ void _thumbnailGenerator(SendPort sendPort) {
   final receivePort = ReceivePort();
   sendPort.send(receivePort.sendPort);
 
-  receivePort.listen((dynamic message) {
+  receivePort.listen((dynamic message) async {
     if (message is _ThumbnailRequest) {
       try {
-        final fileBytes = File(message.path).readAsBytesSync();
+        final fileBytes = await File(message.path).readAsBytes();
         final image = img.decodeImage(fileBytes);
         if (image != null) {
           final thumbnail = img.copyResize(image, width: message.width);
-          final jpgBytes = Uint8List.fromList(img.encodeJpg(thumbnail));
+          final jpgBytes = Uint8List.fromList(
+            img.encodeJpg(thumbnail, quality: 80),
+          );
 
           // Save to disk cache
           final cacheFile = File(message.cachePath);
           // Ensure the directory exists before writing.
-          cacheFile.parent.createSync(recursive: true);
-          cacheFile.writeAsBytesSync(jpgBytes);
+          await cacheFile.parent.create(recursive: true);
+          await cacheFile.writeAsBytes(jpgBytes);
 
           sendPort.send(_ThumbnailResult(message.path, jpgBytes));
         }
@@ -93,6 +95,11 @@ class LocalPickerProvider with ChangeNotifier {
   final _receivePort = ReceivePort();
   Completer<SendPort> _sendPortCompleter = Completer<SendPort>();
 
+  int _processingCount = 0;
+  final int _maxConcurrent = 6;
+  final List<_ThumbnailRequest> _requestQueue = [];
+  final Set<String> _pendingGeneration = {};
+
   LocalPickerProvider() {
     _initIsolate();
     _initCacheDir();
@@ -121,6 +128,9 @@ class LocalPickerProvider with ChangeNotifier {
         }
       } else if (message is _ThumbnailResult) {
         _thumbnailCache[message.path] = message.bytes;
+        _processingCount--;
+        _pendingGeneration.remove(message.path);
+        _processNextRequest();
         notifyListeners();
       }
     });
@@ -274,19 +284,35 @@ class LocalPickerProvider with ChangeNotifier {
       return _thumbnailCache[path];
     }
 
-    // 2. Check disk cache
+    // 2. Check if currently being generated to avoid reading incomplete files
+    if (_pendingGeneration.contains(path)) {
+      return null;
+    }
+
+    // 3. Check disk cache
     if (_cacheDir == null) await _initCacheDir();
     final cacheFile = _getCacheFileForPath(path);
 
     if (await cacheFile.exists()) {
-      final bytes = await cacheFile.readAsBytes();
-      // Load into memory cache and return
-      _thumbnailCache[path] = bytes;
-      notifyListeners();
-      return bytes;
+      try {
+        final bytes = await cacheFile.readAsBytes();
+        if (bytes.isEmpty) {
+          // If the file is empty, delete it and return null
+          await cacheFile.delete();
+          return null;
+        }
+        // Load into memory cache and return
+        _thumbnailCache[path] = bytes;
+        return bytes;
+      } catch (e) {
+        debugPrint('Error reading cache file for $path: $e. Deleting.');
+        // If reading fails, delete the corrupt file
+        await cacheFile.delete();
+        return null;
+      }
     }
 
-    // 3. Not found in any cache
+    // 4. Not found in any cache
     return null;
   }
 
@@ -298,36 +324,41 @@ class LocalPickerProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  void updateThumbnailSize(double size) async {
-    final oldSize = _thumbnailSize;
+  void updateThumbnailSize(double size) {
     _thumbnailSize = size;
     notifyListeners();
-
-    // If the size crosses the 200 threshold, regenerate thumbnails.
-    if ((oldSize <= 200 && size > 200) || (oldSize > 200 && size <= 200)) {
-      // When size threshold changes, clear cache and reset isolate to force regeneration.
-      _thumbnailCache.clear();
-      notifyListeners(); // Immediately reflect the cleared cache in the UI
-      await _resetIsolate();
-      await _regenerateThumbnails();
-      notifyListeners();
-    }
   }
 
   Future<void> _regenerateThumbnails() async {
     _sendPort ??= await _sendPortCompleter.future;
     if (_cacheDir == null) await _initCacheDir();
 
-    final width = _thumbnailSize > 200 ? 600 : 300;
+    const width = 300;
     for (final imagePath in _imagePaths) {
-      if (!_thumbnailCache.containsKey(imagePath)) {
+      if (!_thumbnailCache.containsKey(imagePath) &&
+          !_pendingGeneration.contains(imagePath)) {
         final cacheFile = _getCacheFileForPath(imagePath);
         if (!await cacheFile.exists()) {
-          _sendPort!.send(_ThumbnailRequest(imagePath, width, cacheFile.path));
+          _requestQueue.add(
+            _ThumbnailRequest(imagePath, width, cacheFile.path),
+          );
         }
       }
     }
-    // notifyListeners(); // This is now called by the calling method
+    _processNextRequest();
+  }
+
+  void _processNextRequest() {
+    if (_requestQueue.isEmpty || _processingCount >= _maxConcurrent) {
+      return;
+    }
+
+    while (_processingCount < _maxConcurrent && _requestQueue.isNotEmpty) {
+      final request = _requestQueue.removeAt(0);
+      _pendingGeneration.add(request.path);
+      _processingCount++;
+      _sendPort!.send(request);
+    }
   }
 
   Future<void> exportSelected(BuildContext context) async {
@@ -458,7 +489,7 @@ class LocalPickerProvider with ChangeNotifier {
     }
   }
 
-  static Future<void> clearCacheIfNeeded({int threshold = 100}) async {
+  static Future<void> clearCacheIfNeeded({int threshold = 200}) async {
     try {
       final cache = await getApplicationCacheDirectory();
       final cacheDir = Directory(p.join(cache.path, 'thumbnails'));
