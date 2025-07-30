@@ -22,7 +22,8 @@ class _ThumbnailRequest {
 class _ThumbnailResult {
   final String path;
   final Uint8List bytes;
-  _ThumbnailResult(this.path, this.bytes);
+  final String cacheKey;
+  _ThumbnailResult(this.path, this.bytes, this.cacheKey);
 }
 
 /// The entry point for the isolate.
@@ -43,14 +44,15 @@ void _thumbnailGenerator(SendPort sendPort) {
 
           // Save to disk cache
           final cacheFile = File(message.cachePath);
-          // Ensure the directory exists before writing.
-          await cacheFile.parent.create(recursive: true);
+          // The directory is already created on startup.
           await cacheFile.writeAsBytes(jpgBytes);
-
-          sendPort.send(_ThumbnailResult(message.path, jpgBytes));
+          final cacheKey = p.basename(cacheFile.path);
+          sendPort.send(_ThumbnailResult(message.path, jpgBytes, cacheKey));
         }
       } catch (e) {
+        // Send null back to indicate failure
         debugPrint('Error in isolate for ${message.path}: $e');
+        sendPort.send(_ThumbnailResult(message.path, Uint8List(0), ''));
       }
     }
   });
@@ -67,6 +69,11 @@ class LocalPickerProvider with ChangeNotifier {
   Map<String, Uint8List> get thumbnailCache => _thumbnailCache;
   final Map<String, Uint8List> _thumbnailCache = {};
   Directory? _cacheDir;
+  final Set<String> _diskCacheIndex = {};
+  int _cacheHitCount = 0;
+  int _cacheMissCount = 0;
+  int _diskReadCount = 0;
+
   final Set<String> _selectedImagePaths = {};
   Set<String> get selectedImagePaths => _selectedImagePaths;
   int _totalImageCount = 0;
@@ -108,14 +115,26 @@ class LocalPickerProvider with ChangeNotifier {
   Future<void> _initCacheDir() async {
     final cache = await getApplicationCacheDirectory();
     _cacheDir = Directory(p.join(cache.path, 'thumbnails'));
-    if (!_cacheDir!.existsSync()) {
-      _cacheDir!.createSync(recursive: true);
+    if (!await _cacheDir!.exists()) {
+      await _cacheDir!.create(recursive: true);
+    } else {
+      // Pre-populate the disk cache index
+      final files = _cacheDir!.list();
+      await for (final file in files) {
+        if (file is File) {
+          _diskCacheIndex.add(p.basename(file.path));
+        }
+      }
     }
   }
 
   File _getCacheFileForPath(String path) {
     final hash = md5.convert(utf8.encode(path)).toString();
     return File(p.join(_cacheDir!.path, '$hash.jpg'));
+  }
+
+  String _getCacheKeyForPath(String path) {
+    return '${md5.convert(utf8.encode(path)).toString()}.jpg';
   }
 
   void _initIsolate() async {
@@ -127,9 +146,16 @@ class LocalPickerProvider with ChangeNotifier {
           _sendPortCompleter.complete(message);
         }
       } else if (message is _ThumbnailResult) {
-        _thumbnailCache[message.path] = message.bytes;
         _processingCount--;
         _pendingGeneration.remove(message.path);
+
+        if (message.bytes.isNotEmpty) {
+          _thumbnailCache[message.path] = message.bytes;
+          if (message.cacheKey.isNotEmpty) {
+            _diskCacheIndex.add(message.cacheKey);
+          }
+        }
+        // Even if it failed, we process the next one
         _processNextRequest();
         notifyListeners();
       }
@@ -247,7 +273,10 @@ class LocalPickerProvider with ChangeNotifier {
       }
 
       _imagePaths.addAll(files);
+      // First, trigger generation for thumbnails that don't exist at all.
       await _regenerateThumbnails();
+      // Then, pre-warm the memory cache with thumbnails that are already on disk.
+      _prewarmCache(files);
       notifyListeners();
     } catch (e) {
       debugPrint('Error loading more images: $e');
@@ -281,39 +310,69 @@ class LocalPickerProvider with ChangeNotifier {
   Future<Uint8List?> getThumbnail(String path) async {
     // 1. Check memory cache
     if (_thumbnailCache.containsKey(path)) {
+      _cacheHitCount++;
       return _thumbnailCache[path];
     }
 
-    // 2. Check if currently being generated to avoid reading incomplete files
+    // 2. Check if currently being generated
     if (_pendingGeneration.contains(path)) {
+      return null; // Will be updated later
+    }
+
+    // 3. Check disk cache index (no I/O)
+    final cacheKey = _getCacheKeyForPath(path);
+    if (!_diskCacheIndex.contains(cacheKey)) {
+      _cacheMissCount++;
       return null;
     }
 
-    // 3. Check disk cache
-    if (_cacheDir == null) await _initCacheDir();
+    // 4. Read from disk (I/O)
     final cacheFile = _getCacheFileForPath(path);
-
-    if (await cacheFile.exists()) {
-      try {
-        final bytes = await cacheFile.readAsBytes();
-        if (bytes.isEmpty) {
-          // If the file is empty, delete it and return null
-          await cacheFile.delete();
-          return null;
-        }
-        // Load into memory cache and return
-        _thumbnailCache[path] = bytes;
-        return bytes;
-      } catch (e) {
-        debugPrint('Error reading cache file for $path: $e. Deleting.');
-        // If reading fails, delete the corrupt file
+    _diskReadCount++;
+    try {
+      final bytes = await cacheFile.readAsBytes();
+      if (bytes.isEmpty) {
+        // File is empty/corrupt, remove from index and delete
+        _diskCacheIndex.remove(cacheKey);
         await cacheFile.delete();
+        _cacheMissCount++;
         return null;
       }
+      // Load into memory cache and return
+      _thumbnailCache[path] = bytes;
+      _cacheHitCount++;
+      return bytes;
+    } catch (e) {
+      debugPrint('Error reading cache file for $path: $e. Deleting.');
+      _diskCacheIndex.remove(cacheKey);
+      await cacheFile.delete();
+      _cacheMissCount++;
+      return null;
     }
+  }
 
-    // 4. Not found in any cache
-    return null;
+  Future<void> _prewarmCache(List<String> pathsToPrewarm) async {
+    // This runs in the background, not awaited, to not block the UI.
+    for (final path in pathsToPrewarm) {
+      if (!_thumbnailCache.containsKey(path)) {
+        final cacheKey = _getCacheKeyForPath(path);
+        if (_diskCacheIndex.contains(cacheKey)) {
+          final cacheFile = _getCacheFileForPath(path);
+          try {
+            final bytes = await cacheFile.readAsBytes();
+            if (bytes.isNotEmpty) {
+              _thumbnailCache[path] = bytes;
+              // Optional: notifyListeners() here if you want to see pre-warmed images appear live.
+              // But it might cause too many rebuilds.
+            }
+          } catch (e) {
+            // Ignore errors, the file might be corrupt.
+          }
+        }
+      }
+      // Yield to the event loop to keep the UI responsive.
+      await Future.delayed(Duration.zero);
+    }
   }
 
   void invertSelection() {
@@ -337,8 +396,9 @@ class LocalPickerProvider with ChangeNotifier {
     for (final imagePath in _imagePaths) {
       if (!_thumbnailCache.containsKey(imagePath) &&
           !_pendingGeneration.contains(imagePath)) {
-        final cacheFile = _getCacheFileForPath(imagePath);
-        if (!await cacheFile.exists()) {
+        final cacheKey = _getCacheKeyForPath(imagePath);
+        if (!_diskCacheIndex.contains(cacheKey)) {
+          final cacheFile = _getCacheFileForPath(imagePath);
           _requestQueue.add(
             _ThumbnailRequest(imagePath, width, cacheFile.path),
           );
@@ -505,5 +565,26 @@ class LocalPickerProvider with ChangeNotifier {
     } catch (e) {
       debugPrint('Error checking or clearing thumbnail cache: $e');
     }
+  }
+
+  Map<String, dynamic> getCacheStats() {
+    final hitRate = (_cacheHitCount + _cacheMissCount) == 0
+        ? 0
+        : _cacheHitCount / (_cacheHitCount + _cacheMissCount);
+    return {
+      'hitCount': _cacheHitCount,
+      'missCount': _cacheMissCount,
+      'hitRate': hitRate,
+      'diskReads': _diskReadCount,
+      'memoryCacheSize': _thumbnailCache.length,
+      'diskCacheSize': _diskCacheIndex.length,
+    };
+  }
+
+  void resetCacheStats() {
+    _cacheHitCount = 0;
+    _cacheMissCount = 0;
+    _diskReadCount = 0;
+    notifyListeners();
   }
 }

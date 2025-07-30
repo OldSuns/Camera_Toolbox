@@ -2,6 +2,41 @@
 
 *   [2025-07-30 16:04:30] - 开始分析本地选片功能中缓存生成时间过长的问题
 *   [2025-07-30 17:40:00] - 完成缩略图生成并发优化，并修复了快速滑动时出现的 `Invalid image data` 错误。
+*   [2025-07-30 18:09:00] - 实施了磁盘缓存检查逻辑优化，引入了缓存预热机制和统计监控功能。
+
+## 磁盘缓存与预热优化
+
+### 1. 减少磁盘I/O与目录管理优化
+
+*   **磁盘缓存索引 (`_diskCacheIndex`)**:
+    *   在 `LocalPickerProvider` 中引入 `Set&lt;String&gt; _diskCacheIndex`，用于在内存中维护一个磁盘缓存文件名的哈希索引。
+    *   在 `_initCacheDir` 方法中，应用启动时会遍历一次缓存目录，将所有已存在的缓存文件名加载到此索引中。
+    *   **收益**: `getThumbnail` 方法不再需要每次都调用 `File(path).exists()` 来检查文件是否存在，而是直接查询内存中的 `_diskCacheIndex`，极大地减少了不必要的磁盘I/O操作。
+
+*   **Isolate通信优化**:
+    *   `_thumbnailGenerator` (Isolate) 在成功生成并写入缓存文件后，会将新的缓存键（文件名）通过 `_ThumbnailResult` 对象返回给主 Isolate。
+    *   主 Isolate 的 `_receivePort` 监听器在收到结果后，会将新的缓存键添加到 `_diskCacheIndex` 中，确保内存索引与磁盘状态实时同步。
+
+### 2. 缓存预热机制 (`_prewarmCache`)
+
+*   **目的**: 提高滚动流畅度，通过提前将可能需要的缩略图从磁盘加载到内存中。
+*   **实现**:
+    *   新增 `_prewarmCache(List&lt;String&gt; paths)` 异步方法。
+    *   当 `_loadMoreImages` 加载了新一批图片路径后，会调用此方法。
+    *   `_prewarmCache` 会遍历传入的路径列表，如果某个路径对应的缩略图存在于磁盘缓存 (`_diskCacheIndex`) 但尚未加载到内存缓存 (`_thumbnailCache`)，则会异步地从磁盘读取并存入内存。
+    *   为了防止阻塞UI线程，每次文件读取操作后都会使用 `await Future.delayed(Duration.zero)` 让出事件循环。
+
+### 3. 缓存统计与监控
+
+*   **引入统计变量**:
+    *   `_cacheHitCount`: 内存或磁盘缓存命中次数。
+    *   `_cacheMissCount`: 缓存未命中次数。
+    *   `_diskReadCount`: 实际执行的磁盘读取操作次数。
+*   **`getCacheStats()` 方法**:
+    *   提供一个公开方法，返回一个包含缓存命中率、总命中/未命中次数、磁盘读取次数以及内存/磁盘缓存大小的 `Map`。
+*   **`resetCacheStats()` 方法**:
+    *   提供一个方法用于重置统计数据。
+*   **集成**: `getThumbnail` 方法中集成了对这些统计变量的更新逻辑。
 
 ## 最终实现方案
 
