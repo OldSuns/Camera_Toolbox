@@ -37,6 +37,9 @@ void main() async {
   final themeProvider = ThemeProvider();
   await themeProvider.initialize();
 
+  // 在后台启动缓存清理检查，不阻塞UI线程
+  LocalPickerProvider.clearCacheIfNeeded();
+
   // 使用MultiProvider启动应用程序，以便在小部件树中提供各种服务。
   runApp(
     MultiProvider(
@@ -61,42 +64,7 @@ class CameraToolboxApp extends StatefulWidget {
   State<CameraToolboxApp> createState() => _CameraToolboxAppState();
 }
 
-class _CameraToolboxAppState extends State<CameraToolboxApp>
-    with WindowListener {
-  @override
-  void initState() {
-    super.initState();
-    windowManager.addListener(this);
-    _configureWindowCloseHandler();
-  }
-
-  @override
-  void dispose() {
-    windowManager.removeListener(this);
-    super.dispose();
-  }
-
-  void _configureWindowCloseHandler() async {
-    // 拦截默认的关闭行为，仅在桌面平台上支持
-    if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
-      await windowManager.setPreventClose(true);
-    }
-  }
-
-  @override
-  @override
-  Future<void> onWindowClose() async {
-    // 1. 立即隐藏窗口，给用户即时反馈
-    await windowManager.hide();
-    try {
-      // 2. 等待缓存清理完成。因为窗口已隐藏，用户不会感到延迟。
-      await LocalPickerProvider.clearCache();
-    } finally {
-      // 3. 清理完成后，安全地销毁窗口/进程。
-      await windowManager.destroy();
-    }
-  }
-
+class _CameraToolboxAppState extends State<CameraToolboxApp> {
   @override
   Widget build(BuildContext context) {
     // 根据平台确定字体系列
@@ -121,7 +89,7 @@ class _CameraToolboxAppState extends State<CameraToolboxApp>
 
         // 主题加载完成后，构建MaterialApp。
         return MaterialApp(
-          title: 'OldSun相机工具箱',
+          title: '相机工具箱',
           debugShowCheckedModeBanner: false, // 隐藏调试横幅
           theme: themeProvider.lightTheme.copyWith(
             textTheme: themeProvider.lightTheme.textTheme.apply(

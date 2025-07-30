@@ -333,7 +333,14 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
 
     // Precache initial images
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      provider.precacheAdjacentImages(context);
+      provider.precacheAdjacentImages(context, isScrolling: false);
+    });
+
+    _pageController.addListener(() {
+      if (_pageController.page == _pageController.page?.roundToDouble()) {
+        // Scrolling has stopped
+        provider.precacheAdjacentImages(context, isScrolling: false);
+      }
     });
   }
 
@@ -386,7 +393,7 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
               onPageChanged: (index) {
                 provider.setCurrentImageIndex(index);
                 // Precache images when page changes
-                provider.precacheAdjacentImages(context);
+                provider.precacheAdjacentImages(context, isScrolling: true);
               },
               itemBuilder: (context, index) {
                 return InteractiveViewer(
@@ -505,7 +512,7 @@ class _ThumbnailViewState extends State<ThumbnailView> {
   @override
   void initState() {
     super.initState();
-    // It's important to call this only once.
+    // 直接加载缩略图，不设置优先级
     _thumbnailFuture = Provider.of<LocalPickerProvider>(
       context,
       listen: false,
