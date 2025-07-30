@@ -457,4 +457,22 @@ class LocalPickerProvider with ChangeNotifier {
       debugPrint('Error clearing thumbnail cache: $e');
     }
   }
+
+  static Future<void> clearCacheIfNeeded({int threshold = 100}) async {
+    try {
+      final cache = await getApplicationCacheDirectory();
+      final cacheDir = Directory(p.join(cache.path, 'thumbnails'));
+      if (await cacheDir.exists()) {
+        final files = await cacheDir.list().toList();
+        if (files.length >= threshold) {
+          await clearCache();
+          debugPrint(
+            'Cache limit reached. Cleared ${files.length} thumbnails.',
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('Error checking or clearing thumbnail cache: $e');
+    }
+  }
 }
