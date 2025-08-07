@@ -18,6 +18,7 @@ enum AppPage {
   localPicker,
   rawManager,
   batchRename,
+  photoWatermark,
   cameraDatabase,
   settings,
   about,
@@ -34,6 +35,8 @@ extension AppPageExtension on AppPage {
         return '快速分片';
       case AppPage.batchRename:
         return '批量重命名';
+      case AppPage.photoWatermark:
+        return '照片水印';
       case AppPage.cameraDatabase:
         return '相机数据';
       case AppPage.settings:
@@ -53,6 +56,8 @@ extension AppPageExtension on AppPage {
         return Icons.folder;
       case AppPage.batchRename:
         return Icons.text_format;
+      case AppPage.photoWatermark:
+        return Icons.photo_filter;
       case AppPage.cameraDatabase:
         return Icons.data_usage;
       case AppPage.settings:

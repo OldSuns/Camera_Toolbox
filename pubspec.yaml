@@ -38,3 +38,20 @@ flutter:
   assets:
     - shorebird.yaml
     - lib/data/camera_data/
+    - lib/data/logos/
+    - lib/data/fonts/
+  fonts:
+    - family: AlibabaPuHuiTi-Light
+      fonts:
+        - asset: lib/data/fonts/AlibabaPuHuiTi-2-45-Light.otf
+    - family: AlibabaPuHuiTi-Bold
+      fonts:
+        - asset: lib/data/fonts/AlibabaPuHuiTi-2-85-Bold.otf
+          weight: 700
+    - family: Roboto-Regular
+      fonts:
+        - asset: lib/data/fonts/Roboto-Regular.ttf
+    - family: Roboto-Medium
+      fonts:
+        - asset: lib/data/fonts/Roboto-Medium.ttf
+          weight: 500

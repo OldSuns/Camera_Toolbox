@@ -8,6 +8,7 @@ import 'src/shared/providers/navigation_provider.dart';
 import 'src/features/home/home_screen.dart';
 import 'src/features/local_picker/local_picker_provider.dart';
 import 'src/features/rename/rename_provider.dart';
+import 'src/features/photo_watermark/photo_watermark_provider.dart';
 
 /// 应用程序的主入口点。
 void main() async {
@@ -50,6 +51,8 @@ void main() async {
         ChangeNotifierProvider(create: (_) => NavigationProvider()),
         // 提供RenameProvider以管理重命名功能
         ChangeNotifierProvider(create: (_) => RenameProvider()),
+        // 提供PhotoWatermarkProvider以管理照片水印功能
+        ChangeNotifierProvider(create: (_) => PhotoWatermarkProvider()),
       ],
       child: const CameraToolboxApp(),
     ),
