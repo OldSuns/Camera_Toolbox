@@ -1,9 +1,9 @@
 import 'dart:io';
 import 'dart:async';
+import 'dart:collection';
 import 'dart:isolate';
 import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import 'package:image/image.dart' as img;
@@ -11,13 +11,25 @@ import 'models/watermark_config.dart';
 import 'models/image_container.dart';
 import 'services/watermark_processor.dart';
 
-/// Isolate 请求
+/// Isolate 请求数据 - 包含预处理的水印图像数据
 class _WatermarkRequest {
   final String inputFile;
   final String outputFile;
   final WatermarkConfig config;
+  final String requestId;
+  final Uint8List processedImageBytes;
+  final int imageWidth;
+  final int imageHeight;
 
-  _WatermarkRequest(this.inputFile, this.outputFile, this.config);
+  _WatermarkRequest({
+    required this.inputFile,
+    required this.outputFile,
+    required this.config,
+    required this.requestId,
+    required this.processedImageBytes,
+    required this.imageWidth,
+    required this.imageHeight,
+  });
 }
 
 /// Isolate 结果
@@ -27,6 +39,50 @@ class _WatermarkResult {
   final String? errorMessage;
 
   _WatermarkResult(this.inputFile, this.success, {this.errorMessage});
+}
+
+// --- Isolate Entry Points ---
+
+/// Isolate入口点：保存预处理的图像数据
+void _watermarkGenerator(SendPort sendPort) {
+  final receivePort = ReceivePort();
+  sendPort.send(receivePort.sendPort);
+
+  receivePort.listen((dynamic message) async {
+    if (message is _WatermarkRequest) {
+      try {
+        debugPrint('Isolate: 开始保存 ${message.inputFile}');
+
+        // 将RGBA字节数据转换为image包格式
+        final processedImage = img.Image.fromBytes(
+          width: message.imageWidth,
+          height: message.imageHeight,
+          bytes: message.processedImageBytes.buffer,
+          format: img.Format.uint8,
+          numChannels: 4,
+        );
+
+        // 编码为JPG并保存
+        final jpgBytes = img.encodeJpg(
+          processedImage,
+          quality: message.config.outputQuality,
+        );
+        await File(message.outputFile).writeAsBytes(jpgBytes);
+
+        debugPrint('Isolate: 保存完成 ${message.inputFile}');
+        sendPort.send(_WatermarkResult(message.inputFile, true));
+      } catch (e) {
+        debugPrint('Isolate: 保存失败 ${message.inputFile}: $e');
+        sendPort.send(
+          _WatermarkResult(
+            message.inputFile,
+            false,
+            errorMessage: e.toString(),
+          ),
+        );
+      }
+    }
+  });
 }
 
 /// 处理状态
@@ -46,65 +102,6 @@ class BatchProcessTask {
     this.status = ProcessingStatus.idle,
     this.errorMessage,
     this.progress = 0.0,
-  });
-}
-
-// --- Isolate Entry Point ---
-
-/// The entry point for the watermark generation isolate.
-void _watermarkGenerator(SendPort sendPort) {
-  final receivePort = ReceivePort();
-  sendPort.send(receivePort.sendPort);
-
-  receivePort.listen((dynamic message) async {
-    if (message is _WatermarkRequest) {
-      try {
-        // --- Start of processing logic from _processImageInIsolate ---
-        final container = await ImageContainer.fromFile(
-          File(message.inputFile),
-        );
-        container.useEquivalentFocalLength =
-            message.config.useEquivalentFocalLength;
-
-        final processor = WatermarkProcessorFactory.create(message.config);
-        final processedImage = await processor.process(container);
-
-        final byteData = await processedImage.toByteData(
-          format: ui.ImageByteFormat.rawRgba,
-        );
-        if (byteData == null) {
-          throw Exception('Failed to get byte data from processed image.');
-        }
-
-        final imgImage = img.Image.fromBytes(
-          width: processedImage.width,
-          height: processedImage.height,
-          bytes: byteData.buffer,
-          format: img.Format.uint8,
-          numChannels: 4,
-        );
-
-        final jpgBytes = img.encodeJpg(
-          imgImage,
-          quality: message.config.outputQuality,
-        );
-        await File(message.outputFile).writeAsBytes(jpgBytes);
-
-        container.dispose();
-        processedImage.dispose();
-        // --- End of processing logic ---
-
-        sendPort.send(_WatermarkResult(message.inputFile, true));
-      } catch (e) {
-        sendPort.send(
-          _WatermarkResult(
-            message.inputFile,
-            false,
-            errorMessage: e.toString(),
-          ),
-        );
-      }
-    }
   });
 }
 
@@ -176,6 +173,9 @@ class PhotoWatermarkProvider extends ChangeNotifier {
 
   // 总任务数
   int get totalCount => _batchTasks.length;
+
+  // 批处理取消标志
+  bool _batchProcessingCancelled = false;
 
   // --- Isolate Pool and Task Queue ---
   final List<Isolate?> _isolates = [];
@@ -315,28 +315,13 @@ class PhotoWatermarkProvider extends ChangeNotifier {
     }
   }
 
-  /// 生成预览
+  /// 生成预览 - 在主线程中异步处理
   Future<void> _generatePreview() async {
     if (_currentImage == null) return;
 
     try {
-      final processor = WatermarkProcessorFactory.create(_config);
-
-      // 先生成新的预览图像
-      final newPreviewImage = await processor.process(_currentImage!);
-
-      // 然后释放旧的预览图像并设置新的
-      final oldPreviewImage = _previewImage;
-      _previewImage = newPreviewImage;
-
-      // 延迟释放旧图像，确保UI已经更新
-      if (oldPreviewImage != null) {
-        Future.microtask(() => oldPreviewImage.dispose());
-      }
-
-      notifyListeners();
+      await _generatePreviewInMainThread();
     } catch (e) {
-      // 生成预览失败，记录日志或处理错误
       debugPrint('生成预览失败: $e');
       _status = ProcessingStatus.error;
       _errorMessage = '生成预览失败: $e';
@@ -344,7 +329,7 @@ class PhotoWatermarkProvider extends ChangeNotifier {
     }
   }
 
-  /// 手动生成预览
+  /// 手动生成预览 - 在主线程中异步处理
   Future<void> generatePreviewManually() async {
     if (_currentImage == null) return;
 
@@ -354,23 +339,48 @@ class PhotoWatermarkProvider extends ChangeNotifier {
       _errorMessage = null;
       notifyListeners();
 
+      await _generatePreviewInMainThread();
+
+      _status = ProcessingStatus.idle;
+      notifyListeners();
+    } catch (e) {
+      _status = ProcessingStatus.error;
+      _errorMessage = '生成预览失败: $e';
+      notifyListeners();
+    }
+  }
+
+  /// 在主线程中生成预览
+  Future<void> _generatePreviewInMainThread() async {
+    if (_currentImage == null) return;
+
+    try {
+      debugPrint('主线程: 开始生成预览');
+
+      // 创建水印处理器
       final processor = WatermarkProcessorFactory.create(_config);
 
-      // 先生成新的预览图像
-      final newPreviewImage = await processor.process(_currentImage!);
+      // 处理图像
+      final processedImage = await processor.process(_currentImage!);
 
-      // 然后释放旧的预览图像并设置新的
+      debugPrint(
+        '主线程: 水印处理完成，尺寸: ${processedImage.width}x${processedImage.height}',
+      );
+
+      // 释放旧的预览图像
       final oldPreviewImage = _previewImage;
-      _previewImage = newPreviewImage;
+      _previewImage = processedImage;
 
-      // 延迟释放旧图像，确保UI已经更新
       if (oldPreviewImage != null) {
         Future.microtask(() => oldPreviewImage.dispose());
       }
 
       _status = ProcessingStatus.idle;
+      _needsPreviewGeneration = false;
+      debugPrint('主线程: 预览图像更新完成');
       notifyListeners();
     } catch (e) {
+      debugPrint('主线程: 预览生成失败: $e');
       _status = ProcessingStatus.error;
       _errorMessage = '生成预览失败: $e';
       notifyListeners();
@@ -462,37 +472,148 @@ class PhotoWatermarkProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 开始批处理
+  /// 开始批处理 - 使用定时器分批处理避免阻塞UI
+  /// 开始批处理 - 使用多Isolate并行处理
   Future<void> startBatchProcessing() async {
     if (_batchTasks.isEmpty || isProcessing) return;
 
     _status = ProcessingStatus.processing;
     _errorMessage = null;
     _overallProgress = 0.0;
+    _batchProcessingCancelled = false;
     notifyListeners();
 
     await _ensureOutputDirectory();
     await _initializeIsolates();
 
-    // 重置任务状态并填充队列
-    _requestQueue.clear();
-    _pendingTasks.clear();
+    // 重置任务状态
     for (final task in _batchTasks) {
       task.status = ProcessingStatus.idle;
       task.progress = 0.0;
-      final request = _WatermarkRequest(
-        task.file.path,
-        task.outputPath,
-        _config,
-      );
-      _requestQueue.add(request);
     }
     notifyListeners();
+
+    // 预处理所有图像并填充队列
+    await _preprocessBatchImages();
 
     // 启动处理
     for (int i = 0; i < _maxConcurrent; i++) {
       _processNextRequest();
     }
+  }
+
+  /// 预处理批量图像数据
+  Future<void> _preprocessBatchImages() async {
+    debugPrint('开始预处理批量图像数据，共 ${_batchTasks.length} 个文件');
+
+    _requestQueue.clear();
+    _pendingTasks.clear();
+
+    for (int i = 0; i < _batchTasks.length; i++) {
+      if (_batchProcessingCancelled) break;
+
+      final task = _batchTasks[i];
+
+      try {
+        debugPrint('预处理图像 ${i + 1}/${_batchTasks.length}: ${task.file.path}');
+
+        // 在主线程中加载图像并生成水印
+        final container = await ImageContainer.fromFile(task.file);
+        container.useEquivalentFocalLength = _config.useEquivalentFocalLength;
+
+        // 创建水印处理器并处理图像
+        final processor = WatermarkProcessorFactory.create(_config);
+        final processedImage = await processor.process(container);
+
+        // 将处理后的图像转换为字节数据
+        final byteData = await processedImage.toByteData(
+          format: ui.ImageByteFormat.rawRgba,
+        );
+
+        if (byteData != null) {
+          final request = _WatermarkRequest(
+            inputFile: task.file.path,
+            outputFile: task.outputPath,
+            config: _config,
+            requestId: DateTime.now().millisecondsSinceEpoch.toString(),
+            processedImageBytes: byteData.buffer.asUint8List(),
+            imageWidth: processedImage.width,
+            imageHeight: processedImage.height,
+          );
+          _requestQueue.add(request);
+        } else {
+          throw Exception('Failed to convert processed image to bytes');
+        }
+
+        // 清理资源
+        container.dispose();
+        processedImage.dispose();
+
+        debugPrint('预处理完成: ${task.file.path}');
+      } catch (e) {
+        debugPrint('预处理失败: ${task.file.path}, 错误: $e');
+        task.status = ProcessingStatus.error;
+        task.errorMessage = '预处理失败: $e';
+        _updateOverallProgress();
+      }
+
+      // 更新进度
+      notifyListeners();
+    }
+
+    debugPrint('批量图像预处理完成，队列中有 ${_requestQueue.length} 个任务');
+  }
+
+  /// 处理下一个请求
+  void _processNextRequest() {
+    if (_requestQueue.isEmpty) {
+      // 如果队列为空且没有待处理任务，则完成
+      if (_pendingTasks.isEmpty) {
+        Future.delayed(const Duration(milliseconds: 100), () {
+          if (_status == ProcessingStatus.processing &&
+              !_batchProcessingCancelled) {
+            _status = ProcessingStatus.completed;
+            notifyListeners();
+          }
+        });
+      }
+      return;
+    }
+
+    if (_processingCount >= _maxConcurrent || _batchProcessingCancelled) {
+      return;
+    }
+
+    final request = _requestQueue.removeAt(0);
+    _pendingTasks.add(request.inputFile);
+    _processingCount++;
+
+    // 更新UI，显示任务正在处理
+    final taskIndex = _batchTasks.indexWhere(
+      (t) => t.file.path == request.inputFile,
+    );
+    if (taskIndex != -1) {
+      _batchTasks[taskIndex].status = ProcessingStatus.processing;
+      notifyListeners();
+    }
+
+    // 轮询选择Isolate
+    final isolateIndex = _currentIsolateIndex % _isolateCount;
+    _currentIsolateIndex++;
+
+    // 等待SendPort准备好
+    _sendPortCompleters[isolateIndex].future.then((sendPort) {
+      if (!_batchProcessingCancelled) {
+        sendPort.send(request);
+      }
+    });
+  }
+
+  /// 取消批处理
+  void cancelBatchProcessing() {
+    _batchProcessingCancelled = true;
+    _status = ProcessingStatus.idle;
+    notifyListeners();
   }
 
   /// 保存UI图像为JPG格式
@@ -516,48 +637,6 @@ class PhotoWatermarkProvider extends ChangeNotifier {
     // 保存文件
     final file = File(outputPath);
     await file.writeAsBytes(jpgBytes);
-  }
-
-  void _processNextRequest() {
-    if (_requestQueue.isEmpty) {
-      // If no more requests in queue and no tasks are pending, we are done.
-      if (_pendingTasks.isEmpty) {
-        // A short delay to ensure all UI updates are processed
-        Future.delayed(const Duration(milliseconds: 100), () {
-          if (_status == ProcessingStatus.processing) {
-            _status = ProcessingStatus.completed;
-            notifyListeners();
-          }
-        });
-      }
-      return;
-    }
-
-    if (_processingCount >= _maxConcurrent) {
-      return;
-    }
-
-    final request = _requestQueue.removeAt(0);
-    _pendingTasks.add(request.inputFile);
-    _processingCount++;
-
-    // 更新UI，显示任务正在处理
-    final taskIndex = _batchTasks.indexWhere(
-      (t) => t.file.path == request.inputFile,
-    );
-    if (taskIndex != -1) {
-      _batchTasks[taskIndex].status = ProcessingStatus.processing;
-      notifyListeners();
-    }
-
-    // 轮询选择Isolate
-    final isolateIndex = _currentIsolateIndex % _isolateCount;
-    _currentIsolateIndex++;
-
-    // 等待SendPort准备好
-    _sendPortCompleters[isolateIndex].future.then((sendPort) {
-      sendPort.send(request);
-    });
   }
 
   /// 更新总体进度
@@ -625,8 +704,7 @@ class PhotoWatermarkProvider extends ChangeNotifier {
     }
   }
 
-  // --- Isolate Management ---
-
+  /// 根据CPU核心数初始化设置
   /// 根据CPU核心数初始化设置
   void _initCpuBasedSettings() {
     final cpuCores = Platform.isWindows || Platform.isMacOS || Platform.isLinux
@@ -648,6 +726,8 @@ class PhotoWatermarkProvider extends ChangeNotifier {
   Future<void> _initializeIsolates() async {
     if (_isolatesInitialized) return;
     _isolatesInitialized = true;
+
+    debugPrint('开始初始化 $_isolateCount 个Isolate');
 
     for (int i = 0; i < _isolateCount; i++) {
       final receivePort = ReceivePort();
@@ -671,41 +751,82 @@ class PhotoWatermarkProvider extends ChangeNotifier {
           if (!_sendPortCompleters[i].isCompleted) {
             _sendPortCompleters[i].complete(message);
           }
+          debugPrint('Isolate $i SendPort 已准备');
         } else if (message is _WatermarkResult) {
-          _processingCount--;
-          _pendingTasks.remove(message.inputFile);
-
-          final taskIndex = _batchTasks.indexWhere(
-            (t) => t.file.path == message.inputFile,
-          );
-          if (taskIndex != -1) {
-            final task = _batchTasks[taskIndex];
-            if (message.success) {
-              task.status = ProcessingStatus.completed;
-              task.progress = 1.0;
-            } else {
-              task.status = ProcessingStatus.error;
-              task.errorMessage = message.errorMessage;
-            }
-            _updateOverallProgress();
-            notifyListeners();
-          }
-
-          // Process next request if there are any.
-          _processNextRequest();
+          _handleWatermarkResult(message);
         }
       });
     }
+
+    debugPrint('所有Isolate初始化完成');
+  }
+
+  /// 处理水印结果
+  void _handleWatermarkResult(_WatermarkResult result) {
+    _processingCount--;
+    _pendingTasks.remove(result.inputFile);
+
+    final taskIndex = _batchTasks.indexWhere(
+      (t) => t.file.path == result.inputFile,
+    );
+
+    if (taskIndex != -1) {
+      final task = _batchTasks[taskIndex];
+      if (result.success) {
+        task.status = ProcessingStatus.completed;
+        task.progress = 1.0;
+        debugPrint('任务完成: ${result.inputFile}');
+      } else {
+        task.status = ProcessingStatus.error;
+        task.errorMessage = result.errorMessage;
+        debugPrint('任务失败: ${result.inputFile}, 错误: ${result.errorMessage}');
+      }
+      _updateOverallProgress();
+      notifyListeners();
+    }
+
+    // 处理下一个请求
+    _processNextRequest();
   }
 
   @override
   void dispose() {
-    for (final isolate in _isolates) {
-      isolate?.kill(priority: Isolate.immediate);
-    }
-    _isolates.clear();
+    // 取消批处理
+    _batchProcessingCancelled = true;
+
+    // 清理图像资源
     _currentImage?.dispose();
     _previewImage?.dispose();
+
     super.dispose();
+  }
+}
+
+/// 信号量类，用于控制并发数量
+class Semaphore {
+  final int maxCount;
+  int _currentCount;
+  final Queue<Completer<void>> _waitQueue = Queue<Completer<void>>();
+
+  Semaphore(this.maxCount) : _currentCount = maxCount;
+
+  Future<void> acquire() async {
+    if (_currentCount > 0) {
+      _currentCount--;
+      return;
+    }
+
+    final completer = Completer<void>();
+    _waitQueue.add(completer);
+    return completer.future;
+  }
+
+  void release() {
+    if (_waitQueue.isNotEmpty) {
+      final completer = _waitQueue.removeFirst();
+      completer.complete();
+    } else {
+      _currentCount++;
+    }
   }
 }

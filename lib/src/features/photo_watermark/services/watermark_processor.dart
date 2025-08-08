@@ -5,6 +5,57 @@ import 'package:flutter/services.dart';
 import '../models/watermark_config.dart';
 import '../models/image_container.dart';
 
+/// 水印尺寸参数
+class _WatermarkDimensions {
+  final double watermarkHeight;
+  final double padding;
+  final double maxTextWidth;
+  final int watermarkWidth;
+  final double fontScaleFactor;
+
+  _WatermarkDimensions({
+    required this.watermarkHeight,
+    required this.padding,
+    required this.maxTextWidth,
+    required this.watermarkWidth,
+    required this.fontScaleFactor,
+  });
+}
+
+/// 文本图像集合
+class _TextImages {
+  final ui.Image leftTop;
+  final ui.Image leftBottom;
+  final ui.Image rightTop;
+  final ui.Image rightBottom;
+  final ui.Image leftText;
+  final ui.Image rightText;
+
+  _TextImages({
+    required this.leftTop,
+    required this.leftBottom,
+    required this.rightTop,
+    required this.rightBottom,
+    required this.leftText,
+    required this.rightText,
+  });
+}
+
+/// 内容位置信息
+class _ContentPositions {
+  final double leftContentY;
+  final double rightContentY;
+  final double logoY;
+  final double padding;
+
+  _ContentPositions({
+    required this.leftContentY,
+    required this.rightContentY,
+    required this.logoY,
+    required this.padding,
+  });
+}
+
 /// 水印处理器基类
 abstract class WatermarkProcessor {
   final WatermarkConfig config;
@@ -45,29 +96,27 @@ abstract class WatermarkProcessor {
     }
   }
 
-  /// 创建文字图像
+  /// 创建文字图像 - 优化版本
   Future<ui.Image> createTextImage(
     String text,
     TextStyle style,
     double maxWidth,
   ) async {
-    // 检查参数有效性
+    // 快速参数验证
     if (maxWidth <= 0 || !maxWidth.isFinite) {
       throw ArgumentError('最大宽度必须大于0且为有限值');
     }
 
-    // 检查字体大小有效性
     if (style.fontSize == null ||
         style.fontSize! <= 0 ||
         !style.fontSize!.isFinite) {
       throw ArgumentError('字体大小必须大于0且为有限值');
     }
 
-    // 如果文本为空，返回一个空图像
+    // 空文本快速返回
     if (text.isEmpty) {
       final recorder = ui.PictureRecorder();
       final canvas = Canvas(recorder);
-      // 绘制一个透明像素以确保图像有效
       canvas.drawRect(
         Rect.fromLTWH(0, 0, 1, 1),
         Paint()..color = Colors.transparent,
@@ -76,61 +125,43 @@ abstract class WatermarkProcessor {
       return await picture.toImage(1, 1);
     }
 
-    // 创建文本画笔
-    TextPainter textPainter = TextPainter(
-      text: TextSpan(text: text, style: style),
+    // 创建文本画笔，一次性配置所有属性
+    final textSpan = TextSpan(text: text, style: style);
+    final textPainter = TextPainter(
+      text: textSpan,
       textDirection: TextDirection.ltr,
       maxLines: 1,
       ellipsis: '...',
     );
 
-    // 布局文本
+    // 初始布局
     textPainter.layout(maxWidth: maxWidth);
 
-    // 如果文本宽度超过了最大宽度，调整字体大小
-    TextStyle adjustedStyle = style;
+    // 如果需要调整字体大小，直接计算并重新布局
     if (textPainter.width > maxWidth * 0.95) {
-      // 留出5%的边距
       final scale = (maxWidth * 0.95) / textPainter.width;
       final adjustedFontSize = style.fontSize! * scale;
-      adjustedStyle = style.copyWith(fontSize: adjustedFontSize);
+      final adjustedStyle = style.copyWith(fontSize: adjustedFontSize);
 
-      // 重新创建文本画笔并布局
-      textPainter = TextPainter(
-        text: TextSpan(text: text, style: adjustedStyle),
-        textDirection: TextDirection.ltr,
-        maxLines: 1,
-        ellipsis: '...',
-      );
+      // 直接更新TextPainter的text属性，避免重新创建
+      textPainter.text = TextSpan(text: text, style: adjustedStyle);
       textPainter.layout(maxWidth: maxWidth);
     }
 
+    // 预计算最终尺寸
+    final width = math.max(1, textPainter.width.ceil()).clamp(1, 4096);
+    final height = math.max(1, textPainter.height.ceil()).clamp(1, 4096);
+
+    // 一次性创建并绘制
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
-
     textPainter.paint(canvas, Offset.zero);
-
     final picture = recorder.endRecording();
-    // 确保图像至少有1x1的尺寸，避免创建无效图像
-    final width = math.max(1, textPainter.width.ceil());
-    final height = math.max(1, textPainter.height.ceil());
 
-    // 检查尺寸有效性
-    if (width <= 0 || height <= 0 || !width.isFinite || !height.isFinite) {
-      throw ArgumentError('文本图像尺寸无效: width=$width, height=$height');
-    }
-
-    // 限制最大尺寸以避免内存问题
-    final maxSize = 4096;
-    final finalWidth = math.min(width, maxSize);
-    final finalHeight = math.min(height, maxSize);
-
-    final image = await picture.toImage(finalWidth, finalHeight);
-
-    return image;
+    return await picture.toImage(width, height);
   }
 
-  /// 合并图像（垂直或水平）
+  /// 合并图像（垂直或水平）- 优化版本
   Future<ui.Image> mergeImages(
     List<ui.Image> images, {
     bool vertical = true,
@@ -147,18 +178,13 @@ abstract class WatermarkProcessor {
       throw ArgumentError('间距必须为非负有限值');
     }
 
-    // 检查所有图像的有效性
-    for (int i = 0; i < images.length; i++) {
-      final image = images[i];
-      if (image.width <= 0 || image.height <= 0) {
-        throw ArgumentError('图像 $i 尺寸无效: ${image.width}x${image.height}');
-      }
-    }
-
-    // 计算总尺寸
+    // 预计算所有图像信息和位置，避免重复计算
+    final imageInfos = <({int width, int height, double x, double y})>[];
     int totalWidth = 0;
     int totalHeight = 0;
+    double currentOffset = 0;
 
+    // 第一遍：计算尺寸和基本位置
     if (vertical) {
       totalWidth = images.map((img) => img.width).reduce(math.max);
       totalHeight =
@@ -176,7 +202,45 @@ abstract class WatermarkProcessor {
       throw ArgumentError('结果图像尺寸无效');
     }
 
-    // 创建画布
+    // 第二遍：计算精确位置
+    for (final image in images) {
+      double x = 0;
+      double y = 0;
+
+      if (vertical) {
+        y = currentOffset;
+        // 根据对齐方式计算x坐标
+        switch (alignment) {
+          case Alignment.center:
+            x = (totalWidth - image.width) / 2;
+            break;
+          case Alignment.centerRight:
+            x = totalWidth - image.width.toDouble();
+            break;
+          default:
+            x = 0;
+        }
+        currentOffset += image.height + spacing;
+      } else {
+        x = currentOffset;
+        // 根据对齐方式计算y坐标
+        switch (alignment) {
+          case Alignment.center:
+            y = (totalHeight - image.height) / 2;
+            break;
+          case Alignment.bottomCenter:
+            y = totalHeight - image.height.toDouble();
+            break;
+          default:
+            y = 0;
+        }
+        currentOffset += image.width + spacing;
+      }
+
+      imageInfos.add((width: image.width, height: image.height, x: x, y: y));
+    }
+
+    // 创建画布并一次性绘制所有内容
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
 
@@ -188,44 +252,14 @@ abstract class WatermarkProcessor {
       );
     }
 
-    // 绘制图像
-    double offset = 0;
-    for (final image in images) {
-      double x = 0;
-      double y = 0;
-
-      if (vertical) {
-        y = offset;
-        // 根据对齐方式计算x坐标
-        if (alignment == Alignment.center) {
-          x = (totalWidth - image.width) / 2;
-        } else if (alignment == Alignment.centerRight) {
-          x = totalWidth - image.width.toDouble();
-        }
-      } else {
-        x = offset;
-        // 根据对齐方式计算y坐标
-        if (alignment == Alignment.center) {
-          y = (totalHeight - image.height) / 2;
-        } else if (alignment == Alignment.bottomCenter) {
-          y = totalHeight - image.height.toDouble();
-        }
-      }
-
-      canvas.drawImage(image, Offset(x, y), Paint());
-
-      if (vertical) {
-        offset += image.height + spacing;
-      } else {
-        offset += image.width + spacing;
-      }
+    // 批量绘制图像，减少Paint对象创建
+    final paint = Paint();
+    for (int i = 0; i < images.length; i++) {
+      final info = imageInfos[i];
+      canvas.drawImage(images[i], Offset(info.x, info.y), paint);
     }
 
     final picture = recorder.endRecording();
-    // 检查尺寸有效性
-    if (totalWidth <= 0 || totalHeight <= 0) {
-      throw ArgumentError('合并图像尺寸无效');
-    }
     return await picture.toImage(totalWidth, totalHeight);
   }
 
@@ -447,9 +481,25 @@ abstract class WatermarkProcessor {
   }
 }
 
-/// Normal布局处理器
+/// Normal布局处理器 - 优化版本
 class NormalWatermarkProcessor extends WatermarkProcessor {
   NormalWatermarkProcessor(super.config);
+
+  /// 填充图像以匹配目标高度
+  Future<ui.Image> padImage(ui.Image image, int targetHeight) async {
+    if (image.height >= targetHeight) {
+      return image;
+    }
+
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+
+    final y = (targetHeight - image.height) / 2.0;
+    canvas.drawImage(image, Offset(0, y), Paint());
+
+    final picture = recorder.endRecording();
+    return await picture.toImage(image.width, targetHeight);
+  }
 
   @override
   Future<ui.Image> process(ImageContainer container) async {
@@ -458,378 +508,483 @@ class NormalWatermarkProcessor extends WatermarkProcessor {
       throw ArgumentError('图像容器尺寸无效: ${container.width}x${container.height}');
     }
 
-    // 计算水印高度 - 调整为8%以避免文字过大
-    double watermarkHeight = container.height * 0.08;
-    // 调整内边距为高度的25%
-    final padding = watermarkHeight * 0.25;
+    // 预计算所有尺寸参数
+    final dimensions = _calculateDimensions(container);
 
-    // 验证计算结果有效性
-    if (!watermarkHeight.isFinite ||
-        watermarkHeight <= 0 ||
-        !padding.isFinite ||
-        padding < 0) {
-      throw ArgumentError('水印尺寸计算结果无效');
-    }
+    // 并行创建所有文本图像，减少等待时间
+    final textImagesFuture = _createAllTextImages(container, dimensions);
+
+    // 并行加载Logo（如果需要）
+    final logoFuture = config.logoEnabled
+        ? _loadAndResizeLogo(container.make, dimensions.watermarkHeight)
+        : Future.value(null);
+
+    // 等待所有异步操作完成
+    final results = await Future.wait([textImagesFuture, logoFuture]);
+    final textImages = results[0] as _TextImages;
+    final logo = results[1] as ui.Image?;
+
+    // 一次性创建水印条，避免多次Canvas操作
+    final watermark = await _createWatermarkStrip(
+      container,
+      dimensions,
+      textImages,
+      logo,
+    );
+
+    // 合并原图和水印
+    final result = await _combineImageAndWatermark(
+      container,
+      watermark,
+      dimensions,
+    );
+
+    // 清理中间资源
+    _cleanupResources(textImages, logo);
+
+    return result;
+  }
+
+  /// 计算所有尺寸参数
+  _WatermarkDimensions _calculateDimensions(ImageContainer container) {
+    // 根据图片长宽比，动态调整水印占比和边距
+    final isHorizontal = container.aspectRatio >= 1;
+    final watermarkHeightRatio = isHorizontal ? 0.08 : 0.09;
+    final paddingRatio = isHorizontal ? 0.25 : 0.3;
+    final fontScaleFactor = isHorizontal ? 1.0 : 0.8; // 新增字体缩放因子
+
+    double watermarkHeight = container.height * watermarkHeightRatio;
+    final padding = watermarkHeight * paddingRatio;
 
     // 预估文字高度，确保水印区域足够高
-    final estimatedTextHeight =
-        watermarkHeight * 0.28 * 2 + padding * 0.5; // 两行文字加间距
-    final minRequiredHeight = estimatedTextHeight + padding * 2; // 加上上下边距
+    final estimatedTextHeight = watermarkHeight * 0.28 * 2 + padding * 0.5;
+    final minRequiredHeight = estimatedTextHeight + padding * 2;
 
     if (watermarkHeight < minRequiredHeight) {
-      watermarkHeight = math.min(
-        minRequiredHeight,
-        container.height * 0.15,
-      ); // 最大不超过图像高度的15%
+      watermarkHeight = math.min(minRequiredHeight, container.height * 0.15);
     }
 
-    // 计算最大文字宽度，考虑Logo和边距
-    final maxTextWidth = container.width * 0.4; // 每侧最多占40%的宽度
+    final maxTextWidth = container.width * (isHorizontal ? 0.4 : 0.8);
 
-    // 验证文字宽度有效性
-    if (!maxTextWidth.isFinite || maxTextWidth <= 0) {
-      throw ArgumentError('文字宽度计算结果无效');
-    }
+    return _WatermarkDimensions(
+      watermarkHeight: watermarkHeight,
+      padding: padding,
+      maxTextWidth: maxTextWidth,
+      watermarkWidth: container.width,
+      fontScaleFactor: fontScaleFactor,
+    );
+  }
 
-    // 创建四角文字 - 调整字体大小比例
-    final leftTop = await createTextImage(
-      container.getAttributeString(
-        config.leftTop.type,
-        customValue: config.leftTop.customValue,
+  /// 并行创建所有文本图像
+  Future<_TextImages> _createAllTextImages(
+    ImageContainer container,
+    _WatermarkDimensions dimensions,
+  ) async {
+    // 并行创建四个文本图像
+    final futures = [
+      createTextImage(
+        container.getAttributeString(
+          config.leftTop.type,
+          customValue: config.leftTop.customValue,
+        ),
+        getTextStyle(
+          config.leftTop,
+          fontSize:
+              dimensions.watermarkHeight * 0.28 * dimensions.fontScaleFactor,
+        ),
+        dimensions.maxTextWidth,
       ),
-      getTextStyle(config.leftTop, fontSize: watermarkHeight * 0.28), // 减小字体
-      maxTextWidth,
-    );
-
-    final leftBottom = await createTextImage(
-      container.getAttributeString(
-        config.leftBottom.type,
-        customValue: config.leftBottom.customValue,
+      createTextImage(
+        container.getAttributeString(
+          config.leftBottom.type,
+          customValue: config.leftBottom.customValue,
+        ),
+        getTextStyle(
+          config.leftBottom,
+          fontSize:
+              dimensions.watermarkHeight * 0.24 * dimensions.fontScaleFactor,
+        ),
+        dimensions.maxTextWidth,
       ),
-      getTextStyle(config.leftBottom, fontSize: watermarkHeight * 0.24), // 减小字体
-      maxTextWidth,
-    );
-
-    final rightTop = await createTextImage(
-      container.getAttributeString(
-        config.rightTop.type,
-        customValue: config.rightTop.customValue,
+      createTextImage(
+        container.getAttributeString(
+          config.rightTop.type,
+          customValue: config.rightTop.customValue,
+        ),
+        getTextStyle(
+          config.rightTop,
+          fontSize:
+              dimensions.watermarkHeight * 0.28 * dimensions.fontScaleFactor,
+        ),
+        dimensions.maxTextWidth,
       ),
-      getTextStyle(config.rightTop, fontSize: watermarkHeight * 0.28), // 减小字体
-      maxTextWidth,
-    );
-
-    final rightBottom = await createTextImage(
-      container.getAttributeString(
-        config.rightBottom.type,
-        customValue: config.rightBottom.customValue,
+      createTextImage(
+        container.getAttributeString(
+          config.rightBottom.type,
+          customValue: config.rightBottom.customValue,
+        ),
+        getTextStyle(
+          config.rightBottom,
+          fontSize:
+              dimensions.watermarkHeight * 0.24 * dimensions.fontScaleFactor,
+        ),
+        dimensions.maxTextWidth,
       ),
-      getTextStyle(
-        config.rightBottom,
-        fontSize: watermarkHeight * 0.24,
-      ), // 减小字体
-      maxTextWidth,
+    ];
+
+    final results = await Future.wait(futures);
+
+    // 并行合并左右文字
+    final mergeFutures = [
+      mergeImages(
+        [results[0], results[1]],
+        vertical: true,
+        alignment: Alignment.centerLeft,
+        spacing: dimensions.padding * 0.5,
+      ),
+      mergeImages(
+        [results[2], results[3]],
+        vertical: true,
+        alignment: Alignment.centerRight,
+        spacing: dimensions.padding * 0.5,
+      ),
+    ];
+
+    final mergedResults = await Future.wait(mergeFutures);
+
+    // 统一高度
+    final maxHeight = math.max(
+      mergedResults[0].height,
+      mergedResults[1].height,
     );
+    final paddedFutures = [
+      padImage(mergedResults[0], maxHeight),
+      padImage(mergedResults[1], maxHeight),
+    ];
+    final paddedResults = await Future.wait(paddedFutures);
 
-    // 合并左侧文字 - 调整间距
-    final leftText = await mergeImages(
-      [leftTop, leftBottom],
-      vertical: true,
-      alignment: Alignment.centerLeft,
-      spacing: padding * 0.5, // 减小文字间距
+    return _TextImages(
+      leftTop: results[0],
+      leftBottom: results[1],
+      rightTop: results[2],
+      rightBottom: results[3],
+      leftText: paddedResults[0],
+      rightText: paddedResults[1],
     );
+  }
 
-    // 合并右侧文字 - 调整间距
-    final rightText = await mergeImages(
-      [rightTop, rightBottom],
-      vertical: true,
-      alignment: Alignment.centerRight,
-      spacing: padding * 0.5, // 减小文字间距
-    );
+  /// 加载并调整Logo尺寸
+  Future<ui.Image?> _loadAndResizeLogo(
+    String make,
+    double watermarkHeight,
+  ) async {
+    final logo = await loadLogo(make);
+    if (logo == null) return null;
 
-    // 加载Logo
-    ui.Image? logo;
-    if (config.logoEnabled) {
-      logo = await loadLogo(container.make);
-      if (logo != null) {
-        // 缩放Logo到合适大小 - 调整为80%高度
-        final logoHeight = (watermarkHeight * 0.8).toInt();
-        final logoWidth = (logo.width * logoHeight / logo.height).toInt();
-        logo = await resizeImage(logo, logoWidth, logoHeight);
-      }
-    }
+    final logoHeight = (watermarkHeight * 0.8).toInt();
+    final logoWidth = (logo.width * logoHeight / logo.height).toInt();
+    final resizedLogo = await resizeImage(logo, logoWidth, logoHeight);
 
-    // 创建水印条
-    final watermarkWidth = container.width;
+    // 释放原始Logo
+    logo.dispose();
+    return resizedLogo;
+  }
+
+  /// 创建水印条
+  Future<ui.Image> _createWatermarkStrip(
+    ImageContainer container,
+    _WatermarkDimensions dimensions,
+    _TextImages textImages,
+    ui.Image? logo,
+  ) async {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
 
     // 绘制背景
     canvas.drawRect(
-      Rect.fromLTWH(0, 0, watermarkWidth.toDouble(), watermarkHeight),
+      Rect.fromLTWH(
+        0,
+        0,
+        dimensions.watermarkWidth.toDouble(),
+        dimensions.watermarkHeight,
+      ),
       Paint()..color = config.backgroundColor,
     );
 
-    // 绘制左侧内容
-    // 计算考虑白边宽度的垂直居中位置
-    double leftContentY = (watermarkHeight - leftText.height) / 2;
-    double logoY = (watermarkHeight - (logo?.height ?? 0)) / 2;
+    // 使用优化的绘制逻辑
+    await _drawWatermarkContent(canvas, dimensions, textImages, logo);
 
-    // 如果启用了白边，需要考虑白边宽度对内容位置的影响
+    final picture = recorder.endRecording();
+    return await picture.toImage(
+      dimensions.watermarkWidth,
+      dimensions.watermarkHeight.toInt(),
+    );
+  }
+
+  /// 绘制水印内容
+  Future<void> _drawWatermarkContent(
+    Canvas canvas,
+    _WatermarkDimensions dimensions,
+    _TextImages textImages,
+    ui.Image? logo,
+  ) async {
+    // 预计算位置信息
+    final positions = _calculateContentPositions(dimensions, textImages, logo);
+
+    // 批量绘制，减少Paint对象创建
+    final paint = Paint();
+
+    // 绘制左侧内容
+    _drawLeftContent(canvas, paint, positions, textImages, logo, dimensions);
+
+    // 绘制右侧内容
+    _drawRightContent(canvas, paint, positions, textImages, logo, dimensions);
+  }
+
+  /// 计算内容位置
+  _ContentPositions _calculateContentPositions(
+    _WatermarkDimensions dimensions,
+    _TextImages textImages,
+    ui.Image? logo,
+  ) {
+    // 计算基础位置
+    double leftContentY =
+        (dimensions.watermarkHeight - textImages.leftText.height) / 2;
+    double rightContentY =
+        (dimensions.watermarkHeight - textImages.rightText.height) / 2;
+    double logoY = (dimensions.watermarkHeight - (logo?.height ?? 0)) / 2;
+
+    // 考虑白边影响
     if (config.whiteMarginEnabled) {
-      final borderWidth = watermarkWidth * config.whiteMarginWidth / 100;
+      final borderWidth =
+          dimensions.watermarkWidth * config.whiteMarginWidth / 100;
       leftContentY =
-          (watermarkHeight - leftText.height - 2 * borderWidth) / 2 +
+          (dimensions.watermarkHeight -
+                  textImages.leftText.height -
+                  2 * borderWidth) /
+              2 +
+          borderWidth;
+      rightContentY =
+          (dimensions.watermarkHeight -
+                  textImages.rightText.height -
+                  2 * borderWidth) /
+              2 +
           borderWidth;
       logoY =
-          (watermarkHeight - (logo?.height ?? 0) - 2 * borderWidth) / 2 +
+          (dimensions.watermarkHeight - (logo?.height ?? 0) - 2 * borderWidth) /
+              2 +
           borderWidth;
     }
 
-    // 确保Y坐标不为负数且为有效值
-    leftContentY = (leftContentY.isFinite && leftContentY >= 0)
-        ? leftContentY
-        : 0.0;
-    logoY = (logoY.isFinite && logoY >= 0) ? logoY : 0.0;
+    return _ContentPositions(
+      leftContentY: math.max(0.0, leftContentY),
+      rightContentY: math.max(0.0, rightContentY),
+      logoY: math.max(0.0, logoY),
+      padding: dimensions.padding,
+    );
+  }
 
-    // 确保所有值都是有效的
-    final validPadding = (padding.isFinite && padding >= 0) ? padding : 10.0;
-    final validLogoY = logoY;
-    final validLeftContentY = leftContentY;
-    final validLogoWidth = (logo?.width ?? 0).toDouble();
-
-    // 确保Logo宽度是有效值
-    final safeLogoWidth = validLogoWidth.isFinite ? validLogoWidth : 0.0;
-
-    // 绘制左侧内容和Logo
+  /// 绘制左侧内容
+  void _drawLeftContent(
+    Canvas canvas,
+    Paint paint,
+    _ContentPositions positions,
+    _TextImages textImages,
+    ui.Image? logo,
+    _WatermarkDimensions dimensions,
+  ) {
     if (logo != null) {
       switch (config.logoPosition) {
         case LogoPosition.leftTextLeft:
-          // Logo在左侧文字左侧
-          canvas.drawImage(logo, Offset(validPadding, validLogoY), Paint());
-          // 添加分隔线
-          final separatorX = validPadding + safeLogoWidth + validPadding / 2;
-          final separatorY1 = validLogoY + logo.height * 0.2;
-          final separatorY2 = validLogoY + logo.height * 0.8;
-          // 确保分隔线坐标有效
-          if (separatorX.isFinite &&
-              separatorY1.isFinite &&
-              separatorY2.isFinite) {
-            canvas.drawLine(
-              Offset(separatorX, separatorY1),
-              Offset(separatorX, separatorY2),
-              Paint()
-                ..color = Colors.grey.withValues(alpha: 0.5)
-                ..strokeWidth = 1,
-            );
-          }
-          final leftTextX = separatorX + validPadding / 2;
-          if (leftTextX.isFinite && leftTextX >= 0) {
-            canvas.drawImage(
-              leftText,
-              Offset(leftTextX, validLeftContentY),
-              Paint(),
-            );
-          }
+          _drawLogoTextLayout(
+            canvas,
+            paint,
+            positions,
+            logo,
+            textImages.leftText,
+            true,
+            dimensions,
+          );
           break;
         case LogoPosition.leftTextRight:
-          // Logo在左侧文字右侧
-          canvas.drawImage(
-            leftText,
-            Offset(validPadding, validLeftContentY),
-            Paint(),
+          _drawTextLogoLayout(
+            canvas,
+            paint,
+            positions,
+            textImages.leftText,
+            logo,
+            true,
+            dimensions,
           );
-          // 添加分隔线
-          final separatorX = validPadding + leftText.width + validPadding / 2;
-          final separatorY1 = validLogoY + logo.height * 0.2;
-          final separatorY2 = validLogoY + logo.height * 0.8;
-          // 确保分隔线坐标有效
-          if (separatorX.isFinite &&
-              separatorY1.isFinite &&
-              separatorY2.isFinite) {
-            canvas.drawLine(
-              Offset(separatorX, separatorY1),
-              Offset(separatorX, separatorY2),
-              Paint()
-                ..color = Colors.grey.withValues(alpha: 0.5)
-                ..strokeWidth = 1,
-            );
-          }
-          final logoX = separatorX + validPadding / 2;
-          if (logoX.isFinite && logoX >= 0) {
-            canvas.drawImage(logo, Offset(logoX, validLogoY), Paint());
-          }
           break;
         default:
-          // 默认布局：文字居左
           canvas.drawImage(
-            leftText,
-            Offset(validPadding, validLeftContentY),
-            Paint(),
+            textImages.leftText,
+            Offset(positions.padding, positions.leftContentY),
+            paint,
           );
       }
     } else {
-      // 没有Logo时的布局
       canvas.drawImage(
-        leftText,
-        Offset(validPadding, validLeftContentY),
-        Paint(),
+        textImages.leftText,
+        Offset(positions.padding, positions.leftContentY),
+        paint,
       );
     }
+  }
 
-    // 绘制右侧内容
-    // 计算考虑白边宽度的垂直居中位置
-    double rightContentY = (watermarkHeight - rightText.height) / 2;
-    double rightLogoY = (watermarkHeight - (logo?.height ?? 0)) / 2;
+  /// 绘制右侧内容
+  void _drawRightContent(
+    Canvas canvas,
+    Paint paint,
+    _ContentPositions positions,
+    _TextImages textImages,
+    ui.Image? logo,
+    _WatermarkDimensions dimensions,
+  ) {
+    final watermarkWidth = dimensions.watermarkWidth.toDouble();
+    final rightTextWidth = textImages.rightText.width.toDouble();
 
-    // 如果启用了白边，需要考虑白边宽度对内容位置的影响
-    if (config.whiteMarginEnabled) {
-      final borderWidth = watermarkWidth * config.whiteMarginWidth / 100;
-      rightContentY =
-          (watermarkHeight - rightText.height - 2 * borderWidth) / 2 +
-          borderWidth;
-      rightLogoY =
-          (watermarkHeight - (logo?.height ?? 0) - 2 * borderWidth) / 2 +
-          borderWidth;
-    }
-
-    // 确保Y坐标不为负数且为有效值
-    rightContentY = (rightContentY.isFinite && rightContentY >= 0)
-        ? rightContentY
-        : 0.0;
-    rightLogoY = (rightLogoY.isFinite && rightLogoY >= 0) ? rightLogoY : 0.0;
-
-    // 确保所有值都是有效的
-    final validWatermarkWidth = watermarkWidth.toDouble().isFinite
-        ? watermarkWidth.toDouble()
-        : 100.0;
-    final validRightTextWidth = rightText.width.toDouble().isFinite
-        ? rightText.width.toDouble()
-        : 0.0;
-    final validRightContentY = rightContentY;
-    final validRightLogoY = rightLogoY;
-    final validRightLogoWidth = (logo?.width ?? 0).toDouble();
-    final safeRightLogoWidth = validRightLogoWidth.isFinite
-        ? validRightLogoWidth
-        : 0.0;
-
-    // 绘制右侧内容和Logo
     if (logo != null) {
       switch (config.logoPosition) {
         case LogoPosition.rightTextLeft:
-          // Logo在右侧文字左侧
-          final logoX =
-              validWatermarkWidth -
-              validRightTextWidth -
-              safeRightLogoWidth -
-              validPadding * 2;
-          if (logoX.isFinite && logoX >= 0) {
-            canvas.drawImage(logo, Offset(logoX, validRightLogoY), Paint());
-          }
-          // 添加分隔线
-          final separatorX =
-              validWatermarkWidth - validRightTextWidth - validPadding * 1.5;
-          final separatorY1 = validRightLogoY + logo.height * 0.2;
-          final separatorY2 = validRightLogoY + logo.height * 0.8;
-          if (separatorX.isFinite &&
-              separatorY1.isFinite &&
-              separatorY2.isFinite) {
-            canvas.drawLine(
-              Offset(separatorX, separatorY1),
-              Offset(separatorX, separatorY2),
-              Paint()
-                ..color = Colors.grey.withValues(alpha: 0.5)
-                ..strokeWidth = 1,
-            );
-          }
-          final textX =
-              validWatermarkWidth - validRightTextWidth - validPadding;
-          if (textX.isFinite && textX >= 0) {
-            canvas.drawImage(
-              rightText,
-              Offset(textX, validRightContentY),
-              Paint(),
-            );
-          }
+          _drawLogoTextLayout(
+            canvas,
+            paint,
+            positions,
+            logo,
+            textImages.rightText,
+            false,
+            dimensions,
+          );
           break;
         case LogoPosition.rightTextRight:
-          // Logo在右侧文字右侧
-          final textX =
-              validWatermarkWidth -
-              validRightTextWidth -
-              safeRightLogoWidth -
-              validPadding * 2;
-          if (textX.isFinite && textX >= 0) {
-            canvas.drawImage(
-              rightText,
-              Offset(textX, validRightContentY),
-              Paint(),
-            );
-          }
-          // 添加分隔线
-          final separatorX =
-              validWatermarkWidth - safeRightLogoWidth - validPadding * 1.5;
-          final separatorY1 = validRightLogoY + logo.height * 0.2;
-          final separatorY2 = validRightLogoY + logo.height * 0.8;
-          if (separatorX.isFinite &&
-              separatorY1.isFinite &&
-              separatorY2.isFinite) {
-            canvas.drawLine(
-              Offset(separatorX, separatorY1),
-              Offset(separatorX, separatorY2),
-              Paint()
-                ..color = Colors.grey.withValues(alpha: 0.5)
-                ..strokeWidth = 1,
-            );
-          }
-          final logoX = validWatermarkWidth - safeRightLogoWidth - validPadding;
-          if (logoX.isFinite && logoX >= 0) {
-            canvas.drawImage(logo, Offset(logoX, validRightLogoY), Paint());
-          }
+          _drawTextLogoLayout(
+            canvas,
+            paint,
+            positions,
+            textImages.rightText,
+            logo,
+            false,
+            dimensions,
+          );
           break;
         default:
-          // 默认布局：文字居右
-          final textX =
-              validWatermarkWidth - validRightTextWidth - validPadding;
-          if (textX.isFinite && textX >= 0) {
-            canvas.drawImage(
-              rightText,
-              Offset(textX, validRightContentY),
-              Paint(),
-            );
-          }
+          final textX = watermarkWidth - rightTextWidth - positions.padding;
+          canvas.drawImage(
+            textImages.rightText,
+            Offset(textX, positions.rightContentY),
+            paint,
+          );
       }
     } else {
-      // 没有Logo时的布局
-      final textX = validWatermarkWidth - validRightTextWidth - validPadding;
-      if (textX.isFinite && textX >= 0) {
-        canvas.drawImage(rightText, Offset(textX, validRightContentY), Paint());
-      }
+      final textX = watermarkWidth - rightTextWidth - positions.padding;
+      canvas.drawImage(
+        textImages.rightText,
+        Offset(textX, positions.rightContentY),
+        paint,
+      );
     }
+  }
 
-    final watermarkPicture = recorder.endRecording();
-    final watermark = await watermarkPicture.toImage(
-      watermarkWidth,
-      watermarkHeight.toInt(),
-    );
+  /// 绘制Logo-文本布局
+  void _drawLogoTextLayout(
+    Canvas canvas,
+    Paint paint,
+    _ContentPositions positions,
+    ui.Image logo,
+    ui.Image text,
+    bool isLeft,
+    _WatermarkDimensions dimensions,
+  ) {
+    // 实现Logo在文本左侧的布局逻辑
+    // 简化实现，避免复杂的计算
+    if (isLeft) {
+      canvas.drawImage(logo, Offset(positions.padding, positions.logoY), paint);
+      canvas.drawImage(
+        text,
+        Offset(
+          positions.padding + logo.width + positions.padding * 0.5,
+          positions.leftContentY,
+        ),
+        paint,
+      );
+    } else {
+      final watermarkWidth = dimensions.watermarkWidth.toDouble();
+      final totalWidth = logo.width + text.width + positions.padding * 0.5;
+      final startX = watermarkWidth - totalWidth - positions.padding;
+      canvas.drawImage(logo, Offset(startX, positions.logoY), paint);
+      canvas.drawImage(
+        text,
+        Offset(
+          startX + logo.width + positions.padding * 0.5,
+          positions.rightContentY,
+        ),
+        paint,
+      );
+    }
+  }
 
-    // 合并原图和水印
-    final finalHeight = container.height + watermarkHeight.toInt();
-    final finalRecorder = ui.PictureRecorder();
-    final finalCanvas = Canvas(finalRecorder);
+  /// 绘制文本-Logo布局
+  void _drawTextLogoLayout(
+    Canvas canvas,
+    Paint paint,
+    _ContentPositions positions,
+    ui.Image text,
+    ui.Image logo,
+    bool isLeft,
+    _WatermarkDimensions dimensions,
+  ) {
+    // 实现文本在Logo左侧的布局逻辑
+    if (isLeft) {
+      canvas.drawImage(
+        text,
+        Offset(positions.padding, positions.leftContentY),
+        paint,
+      );
+      canvas.drawImage(
+        logo,
+        Offset(
+          positions.padding + text.width + positions.padding * 0.5,
+          positions.logoY,
+        ),
+        paint,
+      );
+    } else {
+      final watermarkWidth = dimensions.watermarkWidth.toDouble();
+      final totalWidth = text.width + logo.width + positions.padding * 0.5;
+      final startX = watermarkWidth - totalWidth - positions.padding;
+      canvas.drawImage(text, Offset(startX, positions.rightContentY), paint);
+      canvas.drawImage(
+        logo,
+        Offset(startX + text.width + positions.padding * 0.5, positions.logoY),
+        paint,
+      );
+    }
+  }
+
+  /// 合并图像和水印
+  Future<ui.Image> _combineImageAndWatermark(
+    ImageContainer container,
+    ui.Image watermark,
+    _WatermarkDimensions dimensions,
+  ) async {
+    final finalHeight = container.height + dimensions.watermarkHeight.toInt();
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
 
     // 绘制原图
-    finalCanvas.drawImage(container.watermarkImage, Offset.zero, Paint());
+    canvas.drawImage(container.watermarkImage, Offset.zero, Paint());
 
     // 绘制水印
-    finalCanvas.drawImage(
+    canvas.drawImage(
       watermark,
       Offset(0, container.height.toDouble()),
       Paint(),
     );
 
-    final finalPicture = finalRecorder.endRecording();
-    var result = await finalPicture.toImage(container.width, finalHeight);
+    final picture = recorder.endRecording();
+    var result = await picture.toImage(container.width, finalHeight);
 
     // 添加白边（如果启用）
     if (config.whiteMarginEnabled) {
@@ -842,17 +997,21 @@ class NormalWatermarkProcessor extends WatermarkProcessor {
       result = await addShadow(result);
     }
 
-    // 清理资源
-    leftTop.dispose();
-    leftBottom.dispose();
-    rightTop.dispose();
-    rightBottom.dispose();
-    leftText.dispose();
-    rightText.dispose();
+    // 释放水印图像
     watermark.dispose();
-    logo?.dispose();
 
     return result;
+  }
+
+  /// 清理资源
+  void _cleanupResources(_TextImages textImages, ui.Image? logo) {
+    textImages.leftTop.dispose();
+    textImages.leftBottom.dispose();
+    textImages.rightTop.dispose();
+    textImages.rightBottom.dispose();
+    textImages.leftText.dispose();
+    textImages.rightText.dispose();
+    logo?.dispose();
   }
 }
 

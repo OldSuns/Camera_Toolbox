@@ -51,6 +51,27 @@ class ImageContainer {
        iso = _extractISO(exifData),
        gpsInfo = _extractGPSInfo(exifData);
 
+  /// 从图像数据创建容器（用于Isolate中的处理）
+  ImageContainer.fromImageData({
+    required this.originalImage,
+    required this.exifData,
+    required int width,
+    required int height,
+  }) : sourceFile = File(''), // 临时文件，在Isolate中不需要实际文件
+       originalWidth = width,
+       originalHeight = height,
+       model = _extractExifValue(exifData, 'Model', 'Unknown'),
+       make = _extractExifValue(exifData, 'Make', 'Unknown'),
+       lensModel = _extractLensModel(exifData),
+       lensMake = _extractExifValue(exifData, 'LensMake', ''),
+       dateTime = _extractDateTime(exifData),
+       focalLength = _extractFocalLength(exifData),
+       focalLengthIn35mm = _extractFocalLengthIn35mm(exifData),
+       fNumber = _extractFNumber(exifData),
+       exposureTime = _extractExposureTime(exifData),
+       iso = _extractISO(exifData),
+       gpsInfo = _extractGPSInfo(exifData);
+
   /// 获取水印图像
   ui.Image get watermarkImage => _watermarkImage ?? originalImage;
 
