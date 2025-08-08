@@ -50,13 +50,16 @@
   - **离线访问**: 基于项目内置的JSON数据源，无需联网。
   - **相机对比**: 支持双列并排比较不同型号的相机。
 
-### 6. 主题系统
-- **功能描述**: 支持浅色、深色和系统主题切换。
+### 6. 照片边框水印
+- **功能描述**: 为照片添加自定义边框和水印，支持多种布局和样式。
 - **核心特性**:
-  - **Material 3设计**: 采用最新的Material 3设计风格。
-  - **自定义主题色**: 支持自定义主题色，满足个性化需求。
-  - **跨平台字体适配**: 自动适配不同平台的字体，提供一致的视觉体验。
-  - **持久化存储**: 主题配置会自动保存，下次打开应用时无需重新设置。
+  - **多种布局**: 提供纯白边框、黑红配色、背景模糊+白框等多种布局选择。
+  - **自定义元素**: 支持在图片四角添加相机型号、镜头型号、拍摄参数、拍摄时间等信息。
+  - **Logo支持**: 自动识别相机品牌并添加相应Logo，支持多种位置设置。
+  - **颜色和样式**: 可自定义文字颜色、粗细，支持添加白边和阴影效果。
+  - **批量处理**: 支持批量处理多张图片，提高工作效率。
+  - **高质量输出**: 支持自定义输出质量，最高可达100%无损质量。
+  - **预览功能**: 实时预览水印效果，所见即所得。
 
 ## 🚀 技术亮点
 
@@ -110,20 +113,23 @@ graph LR
         C["LocalPickerProvider"]
         D["RenameProvider"]
         E["CameraDatabaseViewModel"]
+        F["PhotoWatermarkProvider"]
     end
 
     subgraph "UI"
-        F["HomeScreen"]
-        G["LocalPickerScreen"]
-        H["RenameScreen"]
-        I["CameraDatabaseScreen"]
+        G["HomeScreen"]
+        H["LocalPickerScreen"]
+        I["RenameScreen"]
+        J["CameraDatabaseScreen"]
+        K["PhotoWatermarkScreen"]
     end
 
-    A --> F
-    B --> F
-    C --> G
-    D --> H
-    E --> I
+    A --> G
+    B --> G
+    C --> H
+    D --> I
+    E --> J
+    F --> K
 ```
 
 ### 并发处理
@@ -140,6 +146,7 @@ graph TD
         D["缩略图生成"]
         E["文件拷贝"]
         F["批量重命名"]
+        G["水印处理"]
     end
 
     A --> B
@@ -147,6 +154,7 @@ graph TD
     B --> D
     B --> E
     B --> F
+    B --> G
 ```
 
 ### 数据流 (本地选片)
@@ -190,6 +198,42 @@ sequenceDiagram
             end
         end
     end
+```
+
+### 数据流 (照片边框水印)
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Screen
+    participant Provider
+    participant Isolate
+    participant ImageProcessor
+    participant FileSystem
+
+    User->>Screen: 选择图片
+    Screen->>Provider: loadImage(file)
+    Provider->>FileSystem: 读取文件
+    FileSystem-->>Provider: 文件字节和EXIF数据
+    Provider->>Provider: 创建ImageContainer
+    Provider->>ImageProcessor: 处理图像并添加水印
+    ImageProcessor-->>Provider: 处理后的图像
+    Provider->>Provider: 更新预览图像
+    Provider-->>Screen: 显示预览
+
+    User->>Screen: 调整设置
+    Screen->>Provider: updateConfig(config)
+    Provider->>Provider: 更新配置
+    Provider->>ImageProcessor: 重新处理图像
+    ImageProcessor-->>Provider: 处理后的图像
+    Provider->>Provider: 更新预览图像
+    Provider-->>Screen: 更新预览
+
+    User->>Screen: 保存图片
+    Screen->>Provider: saveCurrentImage()
+    Provider->>FileSystem: 保存处理后的图像
+    FileSystem-->>Provider: 保存完成
+    Provider-->>Screen: 显示保存成功
 ```
 
 ## 📦 安装与使用
