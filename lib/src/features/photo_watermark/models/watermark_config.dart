@@ -2,21 +2,17 @@ import 'package:flutter/material.dart';
 
 /// 水印布局类型
 enum WatermarkLayoutType {
-  watermarkLeftLogo('normal', 'Logo居左'),
-  watermarkRightLogo('normal(Logo居右)', 'Logo居右'),
-  darkWatermarkLeftLogo('normal(黑红配色)', '黑红配色'),
-  darkWatermarkRightLogo('normal(黑红配色,Logo居右)', '黑红配色Logo居右'),
-  customWatermark('normal(自定义配置)', '自定义配置'),
-  square('1:1填充', '正方形填充'),
-  simple('简洁', '简洁布局'),
-  backgroundBlur('背景模糊', '背景模糊'),
-  backgroundBlurWithBorder('背景模糊+白框', '背景模糊白框'),
-  pureWhiteBorder('白色边框', '纯白边框');
+  pureWhiteBorder('白色边框', '纯白边框', const {}),
+  darkWatermarkLeftLogo('normal(黑红配色)', '黑红配色', const {}),
+  backgroundBlurWithBorder('背景模糊+白框', '背景模糊白框', const {});
+
+  /// 扩展设置，用于存储额外的可调节参数
+  final Map<String, dynamic> extraSettings;
 
   final String id;
   final String displayName;
 
-  const WatermarkLayoutType(this.id, this.displayName);
+  const WatermarkLayoutType(this.id, this.displayName, this.extraSettings);
 }
 
 /// 水印元素类型
@@ -131,8 +127,11 @@ class WatermarkConfig {
   final double fontSize;
   final double boldFontSize;
 
+  final Map<String, dynamic> extraSettings;
+
   WatermarkConfig({
-    this.layoutType = WatermarkLayoutType.watermarkRightLogo,
+    this.extraSettings = const {},
+    this.layoutType = WatermarkLayoutType.pureWhiteBorder,
     this.logoEnabled = true,
     this.logoPosition = LogoPosition.rightTextRight,
     this.backgroundColor = Colors.white,
@@ -183,9 +182,8 @@ class WatermarkConfig {
     LogoPosition logoPosition = LogoPosition.rightTextRight,
   }) {
     return WatermarkConfig(
-      layoutType: logoPosition == LogoPosition.leftTextLeft
-          ? WatermarkLayoutType.darkWatermarkLeftLogo
-          : WatermarkLayoutType.darkWatermarkRightLogo,
+      layoutType: WatermarkLayoutType.darkWatermarkLeftLogo,
+      logoPosition: logoPosition,
       backgroundColor: const Color(0xFF212121),
       leftTop: ElementConfig(
         type: WatermarkElementType.lensModel,
@@ -228,6 +226,7 @@ class WatermarkConfig {
     String? outputDirectory,
     double? fontSize,
     double? boldFontSize,
+    Map<String, dynamic>? extraSettings,
   }) {
     return WatermarkConfig(
       layoutType: layoutType ?? this.layoutType,
@@ -249,6 +248,7 @@ class WatermarkConfig {
       outputDirectory: outputDirectory ?? this.outputDirectory,
       fontSize: fontSize ?? this.fontSize,
       boldFontSize: boldFontSize ?? this.boldFontSize,
+      extraSettings: extraSettings ?? this.extraSettings,
     );
   }
 
@@ -278,7 +278,7 @@ class WatermarkConfig {
     return WatermarkConfig(
       layoutType: WatermarkLayoutType.values.firstWhere(
         (e) => e.id == json['layoutType'],
-        orElse: () => WatermarkLayoutType.watermarkRightLogo,
+        orElse: () => WatermarkLayoutType.pureWhiteBorder,
       ),
       logoEnabled: json['logoEnabled'] ?? true,
       logoPosition: LogoPosition.values.firstWhere(

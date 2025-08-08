@@ -432,43 +432,6 @@ abstract class WatermarkProcessor {
     return await picture.toImage(image.width, image.height);
   }
 
-  /// 创建正方形图像（1:1填充）
-  Future<ui.Image> createSquareImage(ui.Image image) async {
-    // 检查源图像有效性
-    if (image.width <= 0 || image.height <= 0) {
-      throw ArgumentError('源图像尺寸无效');
-    }
-
-    final size = math.max(image.width, image.height);
-
-    // 检查结果尺寸有效性
-    if (size <= 0) {
-      throw ArgumentError('结果图像尺寸无效');
-    }
-
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-
-    // 填充白色背景
-    canvas.drawRect(
-      Rect.fromLTWH(0, 0, size.toDouble(), size.toDouble()),
-      Paint()..color = Colors.white,
-    );
-
-    // 计算居中位置
-    final x = (size - image.width) / 2;
-    final y = (size - image.height) / 2;
-
-    canvas.drawImage(image, Offset(x, y), Paint());
-
-    final picture = recorder.endRecording();
-    // 检查尺寸有效性
-    if (size <= 0) {
-      throw ArgumentError('正方形图像尺寸无效');
-    }
-    return await picture.toImage(size, size);
-  }
-
   /// 获取字体样式
   TextStyle getTextStyle(ElementConfig element, {double fontSize = 14}) {
     final fontFamily = element.isBold
@@ -509,11 +472,15 @@ class NormalWatermarkProcessor extends WatermarkProcessor {
     }
 
     // 预估文字高度，确保水印区域足够高
-    final estimatedTextHeight = watermarkHeight * 0.28 * 2 + padding * 0.5; // 两行文字加间距
+    final estimatedTextHeight =
+        watermarkHeight * 0.28 * 2 + padding * 0.5; // 两行文字加间距
     final minRequiredHeight = estimatedTextHeight + padding * 2; // 加上上下边距
-    
+
     if (watermarkHeight < minRequiredHeight) {
-      watermarkHeight = math.min(minRequiredHeight, container.height * 0.15); // 最大不超过图像高度的15%
+      watermarkHeight = math.min(
+        minRequiredHeight,
+        container.height * 0.15,
+      ); // 最大不超过图像高度的15%
     }
 
     // 计算最大文字宽度，考虑Logo和边距
@@ -889,229 +856,112 @@ class NormalWatermarkProcessor extends WatermarkProcessor {
   }
 }
 
-/// 简洁布局处理器
-class SimpleWatermarkProcessor extends WatermarkProcessor {
-  SimpleWatermarkProcessor(super.config);
-
-  @override
-  Future<ui.Image> process(ImageContainer container) async {
-    // 计算最大宽度，避免文字超出边界
-    final maxTextWidth = container.width * 0.8;
-
-    // 创建 "Shot on" 文字
-    final shotOnText = await createTextImage(
-      'Shot on',
-      TextStyle(
-        fontFamily: 'Roboto-Regular',
-        fontSize: 12 * config.fontSize, // 减小字体
-        color: const Color(0xFF212121),
-      ),
-      maxTextWidth * 0.3, // 限制宽度
-    );
-
-    // 创建型号文字
-    final modelText = await createTextImage(
-      container.model.replaceAll('/', ' ').replaceAll('_', ' '),
-      TextStyle(
-        fontFamily: 'Roboto-Medium',
-        fontSize: 14 * config.boldFontSize, // 减小字体
-        color: const Color(0xFFD32F2F),
-        fontWeight: FontWeight.bold,
-      ),
-      maxTextWidth * 0.4, // 限制宽度
-    );
-
-    // 创建厂商文字
-    final makeText = await createTextImage(
-      container.make.split(' ').first,
-      TextStyle(
-        fontFamily: 'Roboto-Medium',
-        fontSize: 14 * config.boldFontSize, // 减小字体
-        color: const Color(0xFF212121),
-        fontWeight: FontWeight.bold,
-      ),
-      maxTextWidth * 0.3, // 限制宽度
-    );
-
-    // 创建参数文字
-    final paramText = await createTextImage(
-      container.getParamString(useEquivalent: config.useEquivalentFocalLength),
-      TextStyle(
-        fontFamily: 'Roboto-Regular',
-        fontSize: 10 * config.fontSize, // 减小字体
-        color: const Color(0xFF9E9E9E),
-      ),
-      maxTextWidth, // 限制宽度
-    );
-
-    // 合并第一行 - 调整间距
-    final firstLine = await mergeImages(
-      [shotOnText, modelText, makeText],
-      vertical: false,
-      alignment: Alignment.center,
-      spacing: 10, // 减小间距
-    );
-
-    // 合并所有行 - 调整间距
-    final watermarkContent = await mergeImages(
-      [firstLine, paramText],
-      vertical: true,
-      alignment: Alignment.center,
-      spacing: 8, // 减小间距
-    );
-
-    // 计算水印区域大小 - 动态调整高度以适应内容
-    double watermarkHeight = container.height * 0.12;
-    final watermarkWidth = container.width;
-
-    // 检查内容是否会超出边界，如果会则增加水印高度
-    final contentHeight = watermarkContent.height.toDouble();
-    final minRequiredHeight = contentHeight + 20.0; // 留出20像素的边距
-
-    if (watermarkHeight < minRequiredHeight) {
-      watermarkHeight = math.min(
-        minRequiredHeight,
-        container.height * 0.2,
-      ); // 最大不超过图像高度的20%
-    }
-
-    // 创建水印背景
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-
-    // 绘制白色背景
-    canvas.drawRect(
-      Rect.fromLTWH(0, 0, watermarkWidth.toDouble(), watermarkHeight),
-      Paint()..color = Colors.white,
-    );
-
-    // 居中绘制水印内容 - 添加垂直边距检查
-    final contentX = (watermarkWidth - watermarkContent.width) / 2;
-
-    // 计算可用的垂直空间
-    double availableHeight = watermarkHeight;
-    double topMargin = 0.0;
-
-    // 如果启用了白边，需要考虑白边宽度对内容位置的影响
-    if (config.whiteMarginEnabled) {
-      final borderWidth = watermarkWidth * config.whiteMarginWidth / 100;
-      availableHeight = watermarkHeight - 2 * borderWidth;
-      topMargin = borderWidth;
-    }
-
-    // 确保内容不会超出边界 - 如果内容太高，则顶部对齐并留出边距
-    double contentY;
-    if (watermarkContent.height > availableHeight) {
-      // 内容太高，顶部对齐并留出小边距
-      contentY = topMargin + (availableHeight * 0.05); // 留出5%的顶部边距
-    } else {
-      // 内容可以居中
-      contentY = topMargin + (availableHeight - watermarkContent.height) / 2;
-    }
-
-    // 最终检查：确保内容不会超出底部边界
-    final maxY =
-        watermarkHeight -
-        watermarkContent.height -
-        (topMargin > 0 ? topMargin : 5);
-    contentY = math.min(contentY, maxY);
-
-    // 确保Y坐标不为负数
-    contentY = math.max(contentY, topMargin);
-
-    // 确保Offset值有效
-    final validContentX = contentX.isFinite ? contentX : 0.0;
-    final validContentY = contentY.isFinite ? contentY : topMargin;
-
-    canvas.drawImage(
-      watermarkContent,
-      Offset(validContentX, validContentY),
-      Paint(),
-    );
-
-    final watermarkPicture = recorder.endRecording();
-    final watermark = await watermarkPicture.toImage(
-      watermarkWidth,
-      watermarkHeight.toInt(),
-    );
-
-    // 合并原图和水印
-    final result = await mergeImages(
-      [container.watermarkImage, watermark],
-      vertical: true,
-      backgroundColor: Colors.white,
-    );
-
-    // 清理资源
-    shotOnText.dispose();
-    modelText.dispose();
-    makeText.dispose();
-    paramText.dispose();
-    firstLine.dispose();
-    watermarkContent.dispose();
-    watermark.dispose();
-
-    return result;
-  }
+/// 黑红配色水印处理器
+class DarkWatermarkProcessor extends NormalWatermarkProcessor {
+  DarkWatermarkProcessor(WatermarkConfig config)
+    : super(
+        // 创建一个修改后的配置，使用黑红配色，但保留用户选择的Logo位置
+        config.copyWith(
+          backgroundColor: const Color(0xFF212121), // 深灰色背景
+          leftTop: config.leftTop.copyWith(
+            color: const Color(0xFFD32F2F), // 红色
+            isBold: true,
+          ),
+          leftBottom: config.leftBottom.copyWith(
+            color: const Color(0xFFD4D1CC), // 浅灰色
+            isBold: false,
+          ),
+          rightTop: config.rightTop.copyWith(
+            color: const Color(0xFFD32F2F), // 红色
+            isBold: true,
+          ),
+          rightBottom: config.rightBottom.copyWith(
+            color: const Color(0xFFD4D1CC), // 浅灰色
+            isBold: false,
+          ),
+        ),
+      );
 }
 
-/// 正方形布局处理器
-class SquareWatermarkProcessor extends WatermarkProcessor {
-  SquareWatermarkProcessor(super.config);
+/// 背景模糊+白框处理器
+class BackgroundBlurWithBorderProcessor extends WatermarkProcessor {
+  BackgroundBlurWithBorderProcessor(super.config);
 
   @override
   Future<ui.Image> process(ImageContainer container) async {
-    return await createSquareImage(container.watermarkImage);
-  }
-}
-
-/// 背景模糊处理器
-class BackgroundBlurProcessor extends WatermarkProcessor {
-  BackgroundBlurProcessor(super.config);
-
-  @override
-  Future<ui.Image> process(ImageContainer container) async {
-    final paddingPercent = 0.18;
+    final paddingPercent =
+        config.layoutType == WatermarkLayoutType.backgroundBlurWithBorder
+        ? ((config.extraSettings['backgroundBlurPaddingPercent'] ?? 0.18)
+              as double)
+        : 0.18;
     final blurSigma = 35.0;
 
-    // 创建模糊背景
-    final background = await createBlurredBackground(
-      container.originalImage,
-      blurSigma,
+    // 先生成带水印的前景图像
+    final normalProcessor = NormalWatermarkProcessor(config);
+    final watermarkedImage = await normalProcessor.process(container);
+
+    // 计算白边宽度
+    final borderWidth =
+        config.whiteMarginWidth *
+        math.min(watermarkedImage.width, watermarkedImage.height) /
+        256;
+
+    // 给带水印的图像添加白色边框
+    final imageWithBorder = await addBorder(
+      watermarkedImage,
+      borderWidth,
+      Colors.white,
     );
 
-    // 计算新尺寸
-    final newWidth = (container.width * (1 + paddingPercent)).toInt();
-    final newHeight = (container.height * (1 + paddingPercent)).toInt();
-
-    // 缩放背景
-    final scaledBackground = await resizeImage(background, newWidth, newHeight);
-
-    // 创建最终图像
+    // 创建模糊背景 - 使用原始图像
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
+    final paint = Paint()
+      ..imageFilter = ui.ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma);
+    canvas.drawImage(container.originalImage, Offset.zero, paint);
 
-    // 绘制模糊背景
-    canvas.drawImage(scaledBackground, Offset.zero, Paint());
-
-    // 绘制原图（居中）
-    final offsetX = (newWidth - container.width) / 2;
-    final offsetY = (newHeight - container.height) / 2;
-    canvas.drawImage(
-      container.watermarkImage,
-      Offset(offsetX, offsetY),
-      Paint(),
+    final blurredPicture = recorder.endRecording();
+    final blurredImage = await blurredPicture.toImage(
+      container.width,
+      container.height,
     );
 
-    final picture = recorder.endRecording();
-    // 检查尺寸有效性
-    if (newWidth <= 0 || newHeight <= 0) {
-      throw ArgumentError('模糊背景结果图像尺寸无效');
-    }
-    final result = await picture.toImage(newWidth, newHeight);
+    // 计算新尺寸（基于带边框的图像）
+    final newWidth = (imageWithBorder.width * (1 + paddingPercent)).toInt();
+    final newHeight = (imageWithBorder.height * (1 + paddingPercent)).toInt();
+
+    // 缩放模糊背景到新尺寸
+    final scaledBackground = await resizeImage(
+      blurredImage,
+      newWidth,
+      newHeight,
+    );
+
+    // 创建最终图像
+    final finalRecorder = ui.PictureRecorder();
+    final finalCanvas = Canvas(finalRecorder);
+
+    // 绘制缩放后的模糊背景
+    finalCanvas.drawImage(scaledBackground, Offset.zero, Paint());
+
+    // 添加白色遮罩层（10%不透明度）
+    finalCanvas.drawRect(
+      Rect.fromLTWH(0, 0, newWidth.toDouble(), newHeight.toDouble()),
+      Paint()..color = Colors.white.withValues(alpha: 0.1),
+    );
+
+    // 绘制带白框的水印图（居中）
+    final offsetX = (newWidth - imageWithBorder.width) / 2;
+    final offsetY = (newHeight - imageWithBorder.height) / 2;
+    finalCanvas.drawImage(imageWithBorder, Offset(offsetX, offsetY), Paint());
+
+    final finalPicture = finalRecorder.endRecording();
+    final result = await finalPicture.toImage(newWidth, newHeight);
 
     // 清理资源
-    background.dispose();
+    watermarkedImage.dispose();
+    imageWithBorder.dispose();
+    blurredImage.dispose();
     scaledBackground.dispose();
 
     return result;
@@ -1122,20 +972,14 @@ class BackgroundBlurProcessor extends WatermarkProcessor {
 class WatermarkProcessorFactory {
   static WatermarkProcessor create(WatermarkConfig config) {
     switch (config.layoutType) {
-      case WatermarkLayoutType.watermarkLeftLogo:
-      case WatermarkLayoutType.watermarkRightLogo:
-      case WatermarkLayoutType.darkWatermarkLeftLogo:
-      case WatermarkLayoutType.darkWatermarkRightLogo:
-      case WatermarkLayoutType.customWatermark:
       case WatermarkLayoutType.pureWhiteBorder:
         return NormalWatermarkProcessor(config);
-      case WatermarkLayoutType.simple:
-        return SimpleWatermarkProcessor(config);
-      case WatermarkLayoutType.square:
-        return SquareWatermarkProcessor(config);
-      case WatermarkLayoutType.backgroundBlur:
+      case WatermarkLayoutType.darkWatermarkLeftLogo:
+        return DarkWatermarkProcessor(config);
       case WatermarkLayoutType.backgroundBlurWithBorder:
-        return BackgroundBlurProcessor(config);
+        return BackgroundBlurWithBorderProcessor(config);
+      default:
+        throw UnsupportedError('Unsupported layout type: ${config.layoutType}');
     }
   }
 }

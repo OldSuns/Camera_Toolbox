@@ -3,8 +3,9 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../photo_watermark_provider.dart';
+import '../design_tokens.dart';
 
-/// 水印预览组件
+/// 水印预览组件 - 优化版，带棋盘背景
 class WatermarkPreview extends StatelessWidget {
   const WatermarkPreview({super.key});
 
@@ -23,7 +24,7 @@ class WatermarkPreview extends StatelessWidget {
         }
 
         return Container(
-          color: Colors.grey.shade200,
+          color: DesignTokens.backgroundPrimary,
           child: Center(
             child: LayoutBuilder(
               builder: (context, constraints) {
@@ -36,7 +37,7 @@ class WatermarkPreview extends StatelessWidget {
                 // 计算缩放比例
                 final scaleX = containerWidth / imageWidth;
                 final scaleY = containerHeight / imageHeight;
-                final scale = math.min(scaleX, scaleY);
+                final scale = math.min(scaleX, scaleY) * 0.9; // 留出一些边距
 
                 // 计算缩放后的尺寸
                 final scaledWidth = imageWidth * scale;
@@ -47,16 +48,28 @@ class WatermarkPreview extends StatelessWidget {
                   return const Center(child: Text('缩放后尺寸无效'));
                 }
 
-                // 使用FutureBuilder确保图像在绘制前是有效的
+                // 使用InteractiveViewer支持缩放和平移
                 return InteractiveViewer(
                   minScale: 0.1,
                   maxScale: 5.0,
-                  child: SizedBox(
+                  child: Container(
                     width: scaledWidth,
                     height: scaledHeight,
-                    child: CustomPaint(
-                      size: Size(scaledWidth, scaledHeight),
-                      painter: _ImagePainter(previewImage),
+                    decoration: BoxDecoration(
+                      boxShadow: DesignTokens.shadowLarge,
+                    ),
+                    child: Stack(
+                      children: [
+                        // 棋盘背景
+                        Positioned.fill(
+                          child: CustomPaint(painter: _CheckerboardPainter()),
+                        ),
+                        // 图像
+                        CustomPaint(
+                          size: Size(scaledWidth, scaledHeight),
+                          painter: _ImagePainter(previewImage),
+                        ),
+                      ],
                     ),
                   ),
                 );
@@ -69,7 +82,40 @@ class WatermarkPreview extends StatelessWidget {
   }
 }
 
-/// 图像绘制器
+/// 棋盘背景绘制器
+class _CheckerboardPainter extends CustomPainter {
+  static const double tileSize = 10.0;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint();
+    final rows = (size.height / tileSize).ceil();
+    final cols = (size.width / tileSize).ceil();
+
+    for (int row = 0; row < rows; row++) {
+      for (int col = 0; col < cols; col++) {
+        final isEven = (row + col) % 2 == 0;
+        paint.color = isEven
+            ? DesignTokens.checkerboardLight
+            : DesignTokens.checkerboardDark;
+
+        final rect = Rect.fromLTWH(
+          col * tileSize,
+          row * tileSize,
+          tileSize,
+          tileSize,
+        );
+
+        canvas.drawRect(rect, paint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_CheckerboardPainter oldDelegate) => false;
+}
+
+/// 图像绘制器 - 优化版
 class _ImagePainter extends CustomPainter {
   final ui.Image image;
 
@@ -91,7 +137,6 @@ class _ImagePainter extends CustomPainter {
     }
 
     // 检查图像是否已释放
-    // 在Flutter中，已释放的图像可能会导致断言失败
     try {
       // 尝试访问图像属性以检查是否有效
       final width = image.width;
@@ -131,16 +176,16 @@ class _ImagePainter extends CustomPainter {
         return;
       }
 
-      final paint = Paint()..filterQuality = FilterQuality.high;
+      final paint = Paint()
+        ..filterQuality = FilterQuality.high
+        ..isAntiAlias = true;
 
       // 在绘制前再次验证图像是否仍然有效
-      // 这是防止在多线程环境中图像被释放的最后一道防线
       if (image.width > 0 && image.height > 0) {
         canvas.drawImageRect(image, srcRect, dstRect, paint);
       }
     } catch (e) {
       // 图像已释放或无效，直接返回
-      // 这可能发生在图像已被dispose但paint方法仍被调用的情况下
       debugPrint('绘制图像时出错: $e');
       return;
     }

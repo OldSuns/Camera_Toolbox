@@ -129,27 +129,6 @@ class PhotoWatermarkProvider extends ChangeNotifier {
     updateConfig(_config.copyWith(logoEnabled: !_config.logoEnabled));
   }
 
-  /// 切换Logo位置
-  void toggleLogoPosition() {
-    LogoPosition newPosition;
-    switch (_config.logoPosition) {
-      case LogoPosition.leftTextLeft:
-        newPosition = LogoPosition.leftTextRight;
-        break;
-      case LogoPosition.leftTextRight:
-        newPosition = LogoPosition.rightTextLeft;
-        break;
-      case LogoPosition.rightTextLeft:
-        newPosition = LogoPosition.rightTextRight;
-        break;
-      case LogoPosition.rightTextRight:
-        newPosition = LogoPosition.leftTextLeft;
-        break;
-    }
-
-    updateConfig(_config.copyWith(logoPosition: newPosition));
-  }
-
   /// 设置Logo位置
   void setLogoPosition(LogoPosition position) {
     updateConfig(_config.copyWith(logoPosition: position));
@@ -165,6 +144,13 @@ class PhotoWatermarkProvider extends ChangeNotifier {
   /// 更新白边宽度
   void updateWhiteMarginWidth(double width) {
     updateConfig(_config.copyWith(whiteMarginWidth: width));
+  }
+
+  /// 更新背景模糊边框大小
+  void updateBackgroundBlurPaddingPercent(double percent) {
+    final newSettings = Map<String, dynamic>.from(_config.extraSettings);
+    newSettings['backgroundBlurPaddingPercent'] = percent;
+    updateConfig(_config.copyWith(extraSettings: newSettings));
   }
 
   /// 切换阴影

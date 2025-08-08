@@ -2,8 +2,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../photo_watermark_provider.dart';
+import '../design_tokens.dart';
 
-/// 批处理列表组件
+/// 批处理列表组件 - 优化版，适配右侧固定栏
 class BatchProcessList extends StatelessWidget {
   const BatchProcessList({super.key});
 
@@ -12,7 +13,7 @@ class BatchProcessList extends StatelessWidget {
     return Consumer<PhotoWatermarkProvider>(
       builder: (context, provider, _) {
         return ListView.builder(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(DesignTokens.spacing16),
           itemCount: provider.batchTasks.length,
           itemBuilder: (context, index) {
             final task = provider.batchTasks[index];
@@ -28,7 +29,7 @@ class BatchProcessList extends StatelessWidget {
   }
 }
 
-/// 批处理任务项
+/// 批处理任务项 - 优化版
 class _BatchTaskItem extends StatelessWidget {
   final BatchProcessTask task;
   final int index;
@@ -47,27 +48,89 @@ class _BatchTaskItem extends StatelessWidget {
         final isSelected =
             provider.currentImage?.sourceFile.path == task.file.path;
 
-        return Card(
-          margin: const EdgeInsets.only(bottom: 8),
-          color: isSelected
-              ? Theme.of(context).primaryColor.withValues(alpha: 0.1)
-              : null,
-          child: ListTile(
-            leading: _buildStatusIcon(),
-            title: Text(
-              task.file.path.split(Platform.pathSeparator).last,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: isSelected
-                  ? TextStyle(
-                      color: Theme.of(context).primaryColor,
-                      fontWeight: FontWeight.bold,
-                    )
-                  : null,
+        return AnimatedContainer(
+          duration: DesignTokens.animationFast,
+          margin: const EdgeInsets.only(bottom: DesignTokens.spacing8),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? Theme.of(context).primaryColor.withValues(alpha: 0.08)
+                : DesignTokens.backgroundSecondary,
+            borderRadius: BorderRadius.circular(DesignTokens.radiusMedium),
+            border: Border.all(
+              color: isSelected
+                  ? Theme.of(context).primaryColor
+                  : DesignTokens.borderColorLight,
+              width: isSelected ? 2 : 1,
             ),
-            subtitle: _buildSubtitle(),
-            trailing: _buildTrailing(),
-            onTap: () => _onTap(context, provider),
+            boxShadow: isSelected ? DesignTokens.shadowSmall : null,
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () => _onTap(context, provider),
+              borderRadius: BorderRadius.circular(DesignTokens.radiusMedium),
+              child: Padding(
+                padding: const EdgeInsets.all(DesignTokens.spacing12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // 文件名和状态
+                    Row(
+                      children: [
+                        _buildStatusIcon(),
+                        const SizedBox(width: DesignTokens.spacing12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                task.file.path
+                                    .split(Platform.pathSeparator)
+                                    .last,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: DesignTokens.bodyMedium.copyWith(
+                                  fontWeight: isSelected
+                                      ? FontWeight.w600
+                                      : FontWeight.normal,
+                                  color: isSelected
+                                      ? Theme.of(context).primaryColor
+                                      : DesignTokens.textPrimary,
+                                ),
+                              ),
+                              if (_buildSubtitleText() != null) ...[
+                                const SizedBox(height: DesignTokens.spacing4),
+                                Text(
+                                  _buildSubtitleText()!,
+                                  style: DesignTokens.bodySmall.copyWith(
+                                    color: task.status == ProcessingStatus.error
+                                        ? Colors.red
+                                        : DesignTokens.textSecondary,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: DesignTokens.spacing8),
+                        _buildTrailing(),
+                      ],
+                    ),
+                    // 进度条
+                    if (task.status == ProcessingStatus.processing) ...[
+                      const SizedBox(height: DesignTokens.spacing8),
+                      LinearProgressIndicator(
+                        value: task.progress,
+                        backgroundColor: DesignTokens.borderColorLight,
+                        minHeight: 2,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
           ),
         );
       },
@@ -87,64 +150,70 @@ class _BatchTaskItem extends StatelessWidget {
   Widget _buildStatusIcon() {
     switch (task.status) {
       case ProcessingStatus.idle:
-        return const CircleAvatar(
-          backgroundColor: Colors.grey,
-          child: Icon(Icons.hourglass_empty, color: Colors.white, size: 20),
+        return Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            color: DesignTokens.backgroundTertiary,
+            shape: BoxShape.circle,
+          ),
+          child: Icon(
+            Icons.hourglass_empty,
+            color: DesignTokens.textSecondary,
+            size: 16,
+          ),
         );
       case ProcessingStatus.processing:
-        return const CircleAvatar(
-          backgroundColor: Colors.blue,
-          child: SizedBox(
-            width: 20,
-            height: 20,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              color: Colors.white,
-            ),
+        return Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            color: Colors.blue.withValues(alpha: 0.1),
+            shape: BoxShape.circle,
+          ),
+          child: const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2),
           ),
         );
       case ProcessingStatus.completed:
-        return const CircleAvatar(
-          backgroundColor: Colors.green,
-          child: Icon(Icons.check, color: Colors.white, size: 20),
+        return Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            color: Colors.green.withValues(alpha: 0.1),
+            shape: BoxShape.circle,
+          ),
+          child: const Icon(Icons.check_circle, color: Colors.green, size: 20),
         );
       case ProcessingStatus.error:
-        return const CircleAvatar(
-          backgroundColor: Colors.red,
-          child: Icon(Icons.error, color: Colors.white, size: 20),
+        return Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            color: Colors.red.withValues(alpha: 0.1),
+            shape: BoxShape.circle,
+          ),
+          child: const Icon(Icons.error, color: Colors.red, size: 20),
         );
     }
   }
 
-  Widget? _buildSubtitle() {
+  String? _buildSubtitleText() {
     if (task.status == ProcessingStatus.error && task.errorMessage != null) {
-      return Text(
-        task.errorMessage!,
-        style: const TextStyle(color: Colors.red, fontSize: 12),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      );
-    }
-
-    if (task.status == ProcessingStatus.processing) {
-      return LinearProgressIndicator(
-        value: task.progress,
-        backgroundColor: Colors.grey.shade300,
-      );
+      return task.errorMessage!;
     }
 
     if (task.status == ProcessingStatus.completed) {
-      return Text(
-        '已完成',
-        style: TextStyle(color: Colors.green.shade700, fontSize: 12),
-      );
+      return '已完成';
     }
 
     // 显示文件大小
     final file = task.file;
     if (file.existsSync()) {
       final size = file.lengthSync();
-      return Text(_formatFileSize(size), style: const TextStyle(fontSize: 12));
+      return _formatFileSize(size);
     }
 
     return null;
@@ -154,35 +223,56 @@ class _BatchTaskItem extends StatelessWidget {
     if (task.status == ProcessingStatus.idle ||
         task.status == ProcessingStatus.error) {
       return IconButton(
-        icon: const Icon(Icons.close, size: 20),
+        icon: Icon(Icons.close, size: 18, color: DesignTokens.textTertiary),
         onPressed: onRemove,
         padding: EdgeInsets.zero,
         constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+        tooltip: '移除',
       );
     }
 
     if (task.status == ProcessingStatus.completed) {
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          IconButton(
-            icon: const Icon(Icons.folder_open, size: 20),
-            onPressed: () => _openOutputFile(),
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-            tooltip: '打开文件位置',
-          ),
-          IconButton(
-            icon: const Icon(Icons.close, size: 20),
-            onPressed: onRemove,
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-          ),
-        ],
+      return SizedBox(
+        width: 72, // 固定宽度以避免溢出
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            InkWell(
+              onTap: () => _openOutputFile(),
+              borderRadius: BorderRadius.circular(16),
+              child: Container(
+                width: 32,
+                height: 32,
+                alignment: Alignment.center,
+                child: Icon(
+                  Icons.folder_open,
+                  size: 18,
+                  color: DesignTokens.textSecondary,
+                ),
+              ),
+            ),
+            const SizedBox(width: 4),
+            InkWell(
+              onTap: onRemove,
+              borderRadius: BorderRadius.circular(16),
+              child: Container(
+                width: 32,
+                height: 32,
+                alignment: Alignment.center,
+                child: Icon(
+                  Icons.close,
+                  size: 18,
+                  color: DesignTokens.textTertiary,
+                ),
+              ),
+            ),
+          ],
+        ),
       );
     }
 
-    return const SizedBox.shrink();
+    return const SizedBox(width: 32, height: 32);
   }
 
   void _openOutputFile() {
