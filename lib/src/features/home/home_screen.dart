@@ -38,7 +38,7 @@ class _HomeScreenState extends State<HomeScreen>
     Provider.of<NavigationProvider>(context, listen: false).setIndex(index);
     if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
       // 从 AppPage 枚举动态获取标题，确保一致性
-      windowManager.setTitle('OldSun相机工具箱 - ${AppPage.values[index].title}');
+      windowManager.setTitle('相机工具箱 - ${AppPage.values[index].title}');
     }
   }
 
