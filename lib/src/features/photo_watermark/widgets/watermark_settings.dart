@@ -394,9 +394,37 @@ class WatermarkSettings extends StatelessWidget {
                 ),
               ],
             ),
+            const SizedBox(height: DesignTokens.spacing4),
+            _buildQualityHint(provider.config.outputQuality),
           ],
         ),
       ),
+    );
+  }
+
+  /// 构建质量提示文本
+  Widget _buildQualityHint(int quality) {
+    String text;
+    Color color;
+
+    if (quality >= 98) {
+      text = '极限画质 (文件较大)';
+      color = Colors.red;
+    } else if (quality >= 95) {
+      text = '推荐质量 (平衡)';
+      color = Colors.green;
+    } else if (quality >= 85) {
+      text = '高质量 (文件较小)';
+      color = Colors.blue;
+    } else {
+      text = '标准质量 (文件最小)';
+      color = Colors.grey;
+    }
+
+    return Text(
+      text,
+      style: DesignTokens.bodySmall.copyWith(color: color),
+      textAlign: TextAlign.center,
     );
   }
 
@@ -431,6 +459,109 @@ class WatermarkSettings extends StatelessWidget {
   }
 }
 
+/// 构建分组的下拉菜单项
+List<DropdownMenuItem<WatermarkElementType>> _buildGroupedDropdownItems() {
+  final List<DropdownMenuItem<WatermarkElementType>> items = [];
+
+  // 相机和镜头信息
+  items.add(
+    const DropdownMenuItem<WatermarkElementType>(
+      enabled: false,
+      child: Text(
+        '相机和镜头信息',
+        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+      ),
+    ),
+  );
+  items.addAll(
+    [
+      WatermarkElementType.make,
+      WatermarkElementType.model,
+      WatermarkElementType.lensModel,
+      WatermarkElementType.cameraMakeCameraModel,
+      WatermarkElementType.cameraModelLensModel,
+      WatermarkElementType.lensMakeLensModel,
+      WatermarkElementType.totalPixel,
+    ].map((type) {
+      return DropdownMenuItem(
+        value: type,
+        child: Text(type.displayName, style: DesignTokens.bodySmall),
+      );
+    }).toList(),
+  );
+
+  // 拍摄参数
+  items.add(
+    const DropdownMenuItem<WatermarkElementType>(
+      enabled: false,
+      child: Text(
+        '拍摄参数',
+        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+      ),
+    ),
+  );
+  items.addAll(
+    [
+      WatermarkElementType.param,
+      WatermarkElementType.datetime,
+      WatermarkElementType.date,
+    ].map((type) {
+      return DropdownMenuItem(
+        value: type,
+        child: Text(type.displayName, style: DesignTokens.bodySmall),
+      );
+    }).toList(),
+  );
+
+  // 文件信息
+  items.add(
+    const DropdownMenuItem<WatermarkElementType>(
+      enabled: false,
+      child: Text(
+        '文件信息',
+        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+      ),
+    ),
+  );
+  items.addAll(
+    [
+      WatermarkElementType.filename,
+      WatermarkElementType.datetimeFilename,
+      WatermarkElementType.dateFilename,
+    ].map((type) {
+      return DropdownMenuItem(
+        value: type,
+        child: Text(type.displayName, style: DesignTokens.bodySmall),
+      );
+    }).toList(),
+  );
+
+  // 其他
+  items.add(
+    const DropdownMenuItem<WatermarkElementType>(
+      enabled: false,
+      child: Text(
+        '其他',
+        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+      ),
+    ),
+  );
+  items.addAll(
+    [
+      WatermarkElementType.custom,
+      WatermarkElementType.none,
+      WatermarkElementType.geoInfo,
+    ].map((type) {
+      return DropdownMenuItem(
+        value: type,
+        child: Text(type.displayName, style: DesignTokens.bodySmall),
+      );
+    }).toList(),
+  );
+
+  return items;
+}
+
 /// 元素选择器组件 - 优化版
 class _ElementSelector extends StatelessWidget {
   final String label;
@@ -447,85 +578,148 @@ class _ElementSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SizedBox(
-          width: 60,
-          child: Text(
-            label,
-            style: DesignTokens.bodyMedium.copyWith(
-              color: DesignTokens.textSecondary,
-            ),
-          ),
-        ),
-        const SizedBox(width: DesignTokens.spacing8),
-        Expanded(
-          child: SizedBox(
-            height: DesignTokens.inputHeight,
-            child: DropdownButtonFormField<WatermarkElementType>(
-              value: element.type,
-              decoration: DesignTokens.inputDecoration(),
-              style: DesignTokens.bodyMedium.copyWith(
-                color: DesignTokens.textPrimary,
+        Row(
+          children: [
+            SizedBox(
+              width: 60,
+              child: Text(
+                label,
+                style: DesignTokens.bodyMedium.copyWith(
+                  color: DesignTokens.textSecondary,
+                ),
               ),
-              items: WatermarkElementType.values.map((type) {
-                return DropdownMenuItem(
-                  value: type,
-                  child: Text(type.displayName, style: DesignTokens.bodySmall),
-                );
-              }).toList(),
-              onChanged: (type) {
-                if (type != null) {
+            ),
+            const SizedBox(width: DesignTokens.spacing8),
+            Expanded(
+              child: SizedBox(
+                height: DesignTokens.inputHeight,
+                child: DropdownButtonFormField<WatermarkElementType>(
+                  value: element.type,
+                  decoration: DesignTokens.inputDecoration(),
+                  style: DesignTokens.bodyMedium.copyWith(
+                    color: DesignTokens.textPrimary,
+                  ),
+                  items: _buildGroupedDropdownItems(),
+                  onChanged: (type) {
+                    if (type != null) {
+                      provider.updateElement(
+                        position,
+                        element.copyWith(type: type),
+                      );
+                    }
+                  },
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: DesignTokens.spacing8),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            // 颜色选择器
+            InkWell(
+              onTap: () async {
+                final color = await _showColorPicker(context, element.color);
+                if (color != null) {
                   provider.updateElement(
                     position,
-                    element.copyWith(type: type),
+                    element.copyWith(color: color),
                   );
                 }
               },
-            ),
-          ),
-        ),
-        const SizedBox(width: DesignTokens.spacing8),
-        // 颜色选择器
-        InkWell(
-          onTap: () async {
-            final color = await _showColorPicker(context, element.color);
-            if (color != null) {
-              provider.updateElement(position, element.copyWith(color: color));
-            }
-          },
-          borderRadius: BorderRadius.circular(DesignTokens.radiusSmall),
-          child: Container(
-            width: 32,
-            height: 32,
-            decoration: BoxDecoration(
-              color: element.color,
-              border: Border.all(color: DesignTokens.borderColor),
               borderRadius: BorderRadius.circular(DesignTokens.radiusSmall),
+              child: Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: element.color,
+                  border: Border.all(color: DesignTokens.borderColor),
+                  borderRadius: BorderRadius.circular(DesignTokens.radiusSmall),
+                ),
+              ),
             ),
-          ),
-        ),
-        const SizedBox(width: DesignTokens.spacing8),
-        // 粗体切换
-        IconButton(
-          icon: Icon(
-            Icons.format_bold,
-            color: element.isBold
-                ? DesignTokens.textPrimary
-                : DesignTokens.textTertiary,
-            size: 20,
-          ),
-          onPressed: () {
-            provider.updateElement(
-              position,
-              element.copyWith(isBold: !element.isBold),
-            );
-          },
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            const SizedBox(width: DesignTokens.spacing8),
+            // 粗体切换
+            IconButton(
+              icon: Icon(
+                Icons.format_bold,
+                color: element.isBold
+                    ? DesignTokens.textPrimary
+                    : DesignTokens.textTertiary,
+                size: 20,
+              ),
+              onPressed: () {
+                provider.updateElement(
+                  position,
+                  element.copyWith(isBold: !element.isBold),
+                );
+              },
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            ),
+            const SizedBox(width: DesignTokens.spacing8),
+            // 编辑按钮
+            IconButton(
+              icon: const Icon(Icons.edit, size: 20),
+              onPressed: () => _showCustomTextDialog(context),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            ),
+          ],
         ),
       ],
     );
+  }
+
+  /// 显示自定义文本输入对话框
+  Future<void> _showCustomTextDialog(BuildContext context) async {
+    final TextEditingController controller = TextEditingController();
+    final originalValue =
+        provider.currentImage?.getOriginalAttributeString(element.type) ?? '';
+    controller.text =
+        provider.currentImage?.customTexts[element.type] ?? originalValue;
+
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text('编辑 ${element.type.displayName}'),
+          content: TextField(
+            controller: controller,
+            decoration: InputDecoration(
+              hintText: '输入自定义内容',
+              helperText: '默认值: $originalValue',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                controller.text = originalValue;
+              },
+              child: const Text('恢复默认'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop(controller.text);
+              },
+              child: const Text('确定'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (result != null) {
+      provider.updateCustomText(element.type, result);
+    }
   }
 
   Future<Color?> _showColorPicker(

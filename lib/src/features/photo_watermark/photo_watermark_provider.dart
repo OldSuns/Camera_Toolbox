@@ -275,6 +275,15 @@ class PhotoWatermarkProvider extends ChangeNotifier {
     updateConfig(_config.copyWith(outputQuality: quality.clamp(1, 100)));
   }
 
+  /// 更新自定义文本
+  void updateCustomText(WatermarkElementType type, String text) {
+    if (_currentImage != null) {
+      _currentImage!.customTexts[type] = text;
+      _needsPreviewGeneration = true;
+      notifyListeners();
+    }
+  }
+
   /// 加载单个图像
   Future<void> loadImage(File file) async {
     try {

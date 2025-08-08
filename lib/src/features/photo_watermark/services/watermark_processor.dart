@@ -986,15 +986,15 @@ class NormalWatermarkProcessor extends WatermarkProcessor {
     final picture = recorder.endRecording();
     var result = await picture.toImage(container.width, finalHeight);
 
-    // 添加白边（如果启用）
+    // 优先添加阴影（如果启用）
+    if (config.shadowEnabled) {
+      result = await addShadow(result);
+    }
+
+    // 再添加白边（如果启用），这样阴影就会在白边内部
     if (config.whiteMarginEnabled) {
       final borderWidth = container.width * config.whiteMarginWidth / 100;
       result = await addBorder(result, borderWidth, config.backgroundColor);
-    }
-
-    // 添加阴影（如果启用）
-    if (config.shadowEnabled) {
-      result = await addShadow(result);
     }
 
     // 释放水印图像

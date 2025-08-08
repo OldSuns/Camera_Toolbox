@@ -32,6 +32,7 @@ class ImageContainer {
 
   // 是否使用等效焦距
   bool useEquivalentFocalLength = false;
+  Map<WatermarkElementType, String> customTexts = {};
 
   ImageContainer({
     required this.sourceFile,
@@ -121,6 +122,61 @@ class ImageContainer {
 
   /// 获取属性字符串
   String getAttributeString(WatermarkElementType type, {String? customValue}) {
+    if (customTexts.containsKey(type)) {
+      return customTexts[type]!;
+    }
+
+    switch (type) {
+      case WatermarkElementType.model:
+        return model;
+      case WatermarkElementType.make:
+        return make;
+      case WatermarkElementType.lensModel:
+        return lensModel;
+      case WatermarkElementType.param:
+        return getParamString(useEquivalent: useEquivalentFocalLength);
+      case WatermarkElementType.datetime:
+        return dateTime != null
+            ? '${dateTime!.year}-${dateTime!.month.toString().padLeft(2, '0')}-${dateTime!.day.toString().padLeft(2, '0')} ${dateTime!.hour.toString().padLeft(2, '0')}:${dateTime!.minute.toString().padLeft(2, '0')}'
+            : '';
+      case WatermarkElementType.date:
+        return dateTime != null
+            ? '${dateTime!.year}-${dateTime!.month.toString().padLeft(2, '0')}-${dateTime!.day.toString().padLeft(2, '0')}'
+            : '';
+      case WatermarkElementType.custom:
+        return customValue ?? '';
+      case WatermarkElementType.none:
+        return '';
+      case WatermarkElementType.lensMakeLensModel:
+        return '$lensMake $lensModel'.trim();
+      case WatermarkElementType.cameraModelLensModel:
+        return '$model $lensModel'.trim();
+      case WatermarkElementType.totalPixel:
+        return totalPixels;
+      case WatermarkElementType.cameraMakeCameraModel:
+        return '$make $model'.trim();
+      case WatermarkElementType.filename:
+        return filename;
+      case WatermarkElementType.dateFilename:
+        final date = dateTime != null
+            ? '${dateTime!.year}-${dateTime!.month.toString().padLeft(2, '0')}-${dateTime!.day.toString().padLeft(2, '0')}'
+            : '';
+        return '$date $filename'.trim();
+      case WatermarkElementType.datetimeFilename:
+        final datetime = dateTime != null
+            ? '${dateTime!.year}-${dateTime!.month.toString().padLeft(2, '0')}-${dateTime!.day.toString().padLeft(2, '0')} ${dateTime!.hour.toString().padLeft(2, '0')}:${dateTime!.minute.toString().padLeft(2, '0')}'
+            : '';
+        return '$datetime $filename'.trim();
+      case WatermarkElementType.geoInfo:
+        return gpsInfo ?? '无';
+    }
+  }
+
+  /// 获取原始属性字符串（不考虑customTexts）
+  String getOriginalAttributeString(
+    WatermarkElementType type, {
+    String? customValue,
+  }) {
     switch (type) {
       case WatermarkElementType.model:
         return model;

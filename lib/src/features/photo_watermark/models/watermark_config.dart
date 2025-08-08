@@ -144,7 +144,7 @@ class WatermarkConfig {
     this.shadowEnabled = false,
     this.useEquivalentFocalLength = false,
     this.paddingWithOriginalRatio = false,
-    this.outputQuality = 100,
+    this.outputQuality = 95,
     this.outputDirectory = 'output',
     this.fontSize = 1.0,
     this.boldFontSize = 1.0,
