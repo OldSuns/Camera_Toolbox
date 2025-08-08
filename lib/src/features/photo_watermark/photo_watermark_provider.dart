@@ -1,5 +1,8 @@
 import 'dart:io';
+import 'dart:async';
+import 'dart:isolate';
 import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
@@ -7,6 +10,24 @@ import 'package:image/image.dart' as img;
 import 'models/watermark_config.dart';
 import 'models/image_container.dart';
 import 'services/watermark_processor.dart';
+
+/// Isolate 请求
+class _WatermarkRequest {
+  final String inputFile;
+  final String outputFile;
+  final WatermarkConfig config;
+
+  _WatermarkRequest(this.inputFile, this.outputFile, this.config);
+}
+
+/// Isolate 结果
+class _WatermarkResult {
+  final String inputFile;
+  final bool success;
+  final String? errorMessage;
+
+  _WatermarkResult(this.inputFile, this.success, {this.errorMessage});
+}
 
 /// 处理状态
 enum ProcessingStatus { idle, processing, completed, error }
@@ -28,8 +49,71 @@ class BatchProcessTask {
   });
 }
 
+// --- Isolate Entry Point ---
+
+/// The entry point for the watermark generation isolate.
+void _watermarkGenerator(SendPort sendPort) {
+  final receivePort = ReceivePort();
+  sendPort.send(receivePort.sendPort);
+
+  receivePort.listen((dynamic message) async {
+    if (message is _WatermarkRequest) {
+      try {
+        // --- Start of processing logic from _processImageInIsolate ---
+        final container = await ImageContainer.fromFile(
+          File(message.inputFile),
+        );
+        container.useEquivalentFocalLength =
+            message.config.useEquivalentFocalLength;
+
+        final processor = WatermarkProcessorFactory.create(message.config);
+        final processedImage = await processor.process(container);
+
+        final byteData = await processedImage.toByteData(
+          format: ui.ImageByteFormat.rawRgba,
+        );
+        if (byteData == null) {
+          throw Exception('Failed to get byte data from processed image.');
+        }
+
+        final imgImage = img.Image.fromBytes(
+          width: processedImage.width,
+          height: processedImage.height,
+          bytes: byteData.buffer,
+          format: img.Format.uint8,
+          numChannels: 4,
+        );
+
+        final jpgBytes = img.encodeJpg(
+          imgImage,
+          quality: message.config.outputQuality,
+        );
+        await File(message.outputFile).writeAsBytes(jpgBytes);
+
+        container.dispose();
+        processedImage.dispose();
+        // --- End of processing logic ---
+
+        sendPort.send(_WatermarkResult(message.inputFile, true));
+      } catch (e) {
+        sendPort.send(
+          _WatermarkResult(
+            message.inputFile,
+            false,
+            errorMessage: e.toString(),
+          ),
+        );
+      }
+    }
+  });
+}
+
 /// 照片水印Provider
 class PhotoWatermarkProvider extends ChangeNotifier {
+  PhotoWatermarkProvider() {
+    _initCpuBasedSettings();
+  }
+
   // 配置
   WatermarkConfig _config = WatermarkConfig();
   WatermarkConfig get config => _config;
@@ -92,6 +176,20 @@ class PhotoWatermarkProvider extends ChangeNotifier {
 
   // 总任务数
   int get totalCount => _batchTasks.length;
+
+  // --- Isolate Pool and Task Queue ---
+  final List<Isolate?> _isolates = [];
+  final List<SendPort?> _sendPorts = [];
+  final List<ReceivePort> _receivePorts = [];
+  final List<Completer<SendPort>> _sendPortCompleters = [];
+
+  int _processingCount = 0;
+  late final int _maxConcurrent;
+  late final int _isolateCount;
+  final List<_WatermarkRequest> _requestQueue = [];
+  final Set<String> _pendingTasks = {}; // Tracks input file paths
+  int _currentIsolateIndex = 0;
+  bool _isolatesInitialized = false;
 
   /// 更新配置
   void updateConfig(WatermarkConfig newConfig) {
@@ -366,49 +464,34 @@ class PhotoWatermarkProvider extends ChangeNotifier {
 
   /// 开始批处理
   Future<void> startBatchProcessing() async {
-    if (_batchTasks.isEmpty) return;
+    if (_batchTasks.isEmpty || isProcessing) return;
 
-    try {
-      _status = ProcessingStatus.processing;
-      _errorMessage = null;
-      _overallProgress = 0.0;
-      notifyListeners();
+    _status = ProcessingStatus.processing;
+    _errorMessage = null;
+    _overallProgress = 0.0;
+    notifyListeners();
 
-      // 确保输出目录已设置
-      await _ensureOutputDirectory();
+    await _ensureOutputDirectory();
+    await _initializeIsolates();
 
-      // 处理每个任务
-      for (int i = 0; i < _batchTasks.length; i++) {
-        final task = _batchTasks[i];
+    // 重置任务状态并填充队列
+    _requestQueue.clear();
+    _pendingTasks.clear();
+    for (final task in _batchTasks) {
+      task.status = ProcessingStatus.idle;
+      task.progress = 0.0;
+      final request = _WatermarkRequest(
+        task.file.path,
+        task.outputPath,
+        _config,
+      );
+      _requestQueue.add(request);
+    }
+    notifyListeners();
 
-        if (task.status == ProcessingStatus.completed) {
-          continue;
-        }
-
-        try {
-          task.status = ProcessingStatus.processing;
-          notifyListeners();
-
-          // 在Isolate中处理图像
-          await _processImageInIsolate(task);
-
-          task.status = ProcessingStatus.completed;
-          task.progress = 1.0;
-        } catch (e) {
-          task.status = ProcessingStatus.error;
-          task.errorMessage = e.toString();
-        }
-
-        _updateOverallProgress();
-        notifyListeners();
-      }
-
-      _status = ProcessingStatus.completed;
-      notifyListeners();
-    } catch (e) {
-      _status = ProcessingStatus.error;
-      _errorMessage = '批处理失败: $e';
-      notifyListeners();
+    // 启动处理
+    for (int i = 0; i < _maxConcurrent; i++) {
+      _processNextRequest();
     }
   }
 
@@ -435,22 +518,46 @@ class PhotoWatermarkProvider extends ChangeNotifier {
     await file.writeAsBytes(jpgBytes);
   }
 
-  /// 在Isolate中处理图像
-  Future<void> _processImageInIsolate(BatchProcessTask task) async {
-    // 加载图像
-    final container = await ImageContainer.fromFile(task.file);
-    container.useEquivalentFocalLength = _config.useEquivalentFocalLength;
+  void _processNextRequest() {
+    if (_requestQueue.isEmpty) {
+      // If no more requests in queue and no tasks are pending, we are done.
+      if (_pendingTasks.isEmpty) {
+        // A short delay to ensure all UI updates are processed
+        Future.delayed(const Duration(milliseconds: 100), () {
+          if (_status == ProcessingStatus.processing) {
+            _status = ProcessingStatus.completed;
+            notifyListeners();
+          }
+        });
+      }
+      return;
+    }
 
-    // 处理图像
-    final processor = WatermarkProcessorFactory.create(_config);
-    final processedImage = await processor.process(container);
+    if (_processingCount >= _maxConcurrent) {
+      return;
+    }
 
-    // 保存为JPG格式
-    await _saveImageAsJpg(processedImage, task.outputPath);
+    final request = _requestQueue.removeAt(0);
+    _pendingTasks.add(request.inputFile);
+    _processingCount++;
 
-    // 清理资源
-    container.dispose();
-    processedImage.dispose();
+    // 更新UI，显示任务正在处理
+    final taskIndex = _batchTasks.indexWhere(
+      (t) => t.file.path == request.inputFile,
+    );
+    if (taskIndex != -1) {
+      _batchTasks[taskIndex].status = ProcessingStatus.processing;
+      notifyListeners();
+    }
+
+    // 轮询选择Isolate
+    final isolateIndex = _currentIsolateIndex % _isolateCount;
+    _currentIsolateIndex++;
+
+    // 等待SendPort准备好
+    _sendPortCompleters[isolateIndex].future.then((sendPort) {
+      sendPort.send(request);
+    });
   }
 
   /// 更新总体进度
@@ -518,8 +625,85 @@ class PhotoWatermarkProvider extends ChangeNotifier {
     }
   }
 
+  // --- Isolate Management ---
+
+  /// 根据CPU核心数初始化设置
+  void _initCpuBasedSettings() {
+    final cpuCores = Platform.isWindows || Platform.isMacOS || Platform.isLinux
+        ? Platform.numberOfProcessors
+        : 2; // Default for mobile
+
+    // Isolate数量 = CPU核心数 / 2，最少1个，最多4个
+    _isolateCount = (cpuCores / 2).ceil().clamp(1, 4);
+
+    // 最大并发数 = CPU核心数 - 1，最少1个，最多6个
+    _maxConcurrent = (cpuCores - 1).clamp(1, 6);
+
+    debugPrint(
+      'CPU Cores: $cpuCores, Isolate Count: $_isolateCount, Max Concurrent: $_maxConcurrent',
+    );
+  }
+
+  /// 初始化多个Isolate
+  Future<void> _initializeIsolates() async {
+    if (_isolatesInitialized) return;
+    _isolatesInitialized = true;
+
+    for (int i = 0; i < _isolateCount; i++) {
+      final receivePort = ReceivePort();
+      final completer = Completer<SendPort>();
+
+      _receivePorts.add(receivePort);
+      _sendPortCompleters.add(completer);
+      _isolates.add(null);
+      _sendPorts.add(null);
+
+      final isolate = await Isolate.spawn(
+        _watermarkGenerator,
+        receivePort.sendPort,
+        debugName: 'WatermarkIsolate_$i',
+      );
+      _isolates[i] = isolate;
+
+      receivePort.listen((dynamic message) {
+        if (message is SendPort) {
+          _sendPorts[i] = message;
+          if (!_sendPortCompleters[i].isCompleted) {
+            _sendPortCompleters[i].complete(message);
+          }
+        } else if (message is _WatermarkResult) {
+          _processingCount--;
+          _pendingTasks.remove(message.inputFile);
+
+          final taskIndex = _batchTasks.indexWhere(
+            (t) => t.file.path == message.inputFile,
+          );
+          if (taskIndex != -1) {
+            final task = _batchTasks[taskIndex];
+            if (message.success) {
+              task.status = ProcessingStatus.completed;
+              task.progress = 1.0;
+            } else {
+              task.status = ProcessingStatus.error;
+              task.errorMessage = message.errorMessage;
+            }
+            _updateOverallProgress();
+            notifyListeners();
+          }
+
+          // Process next request if there are any.
+          _processNextRequest();
+        }
+      });
+    }
+  }
+
   @override
   void dispose() {
+    for (final isolate in _isolates) {
+      isolate?.kill(priority: Isolate.immediate);
+    }
+    _isolates.clear();
     _currentImage?.dispose();
     _previewImage?.dispose();
     super.dispose();

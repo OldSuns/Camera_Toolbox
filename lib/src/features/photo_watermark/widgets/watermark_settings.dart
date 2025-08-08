@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:provider/provider.dart';
 import '../photo_watermark_provider.dart';
 import '../models/watermark_config.dart';
@@ -531,65 +532,36 @@ class _ElementSelector extends StatelessWidget {
     BuildContext context,
     Color initialColor,
   ) async {
+    Color pickedColor = initialColor;
     return showDialog<Color>(
       context: context,
       builder: (context) {
         return AlertDialog(
           title: const Text('选择颜色'),
           content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // 预设颜色
-                Wrap(
-                  spacing: DesignTokens.spacing8,
-                  runSpacing: DesignTokens.spacing8,
-                  children:
-                      [
-                        Colors.black,
-                        Colors.white,
-                        Colors.grey,
-                        const Color(0xFF212121),
-                        const Color(0xFF757575),
-                        const Color(0xFFD32F2F),
-                        const Color(0xFFD4D1CC),
-                        const Color(0xFF9E9E9E),
-                        Colors.blue,
-                        Colors.green,
-                        Colors.orange,
-                        Colors.purple,
-                      ].map((color) {
-                        return InkWell(
-                          onTap: () {
-                            Navigator.of(context).pop(color);
-                          },
-                          borderRadius: BorderRadius.circular(
-                            DesignTokens.radiusSmall,
-                          ),
-                          child: Container(
-                            width: 48,
-                            height: 48,
-                            decoration: BoxDecoration(
-                              color: color,
-                              border: Border.all(
-                                color: DesignTokens.borderColor,
-                                width: color == Colors.white ? 1 : 0,
-                              ),
-                              borderRadius: BorderRadius.circular(
-                                DesignTokens.radiusSmall,
-                              ),
-                            ),
-                          ),
-                        );
-                      }).toList(),
-                ),
-              ],
+            child: ColorPicker(
+              pickerColor: initialColor,
+              onColorChanged: (color) {
+                pickedColor = color;
+              },
+              pickerAreaHeightPercent: 0.8,
+              enableAlpha: true,
+              displayThumbColor: true,
+              paletteType: PaletteType.hsvWithHue,
             ),
           ),
-          actions: [
+          actions: <Widget>[
             TextButton(
-              onPressed: () => Navigator.of(context).pop(),
               child: const Text('取消'),
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+            ),
+            TextButton(
+              child: const Text('确定'),
+              onPressed: () {
+                Navigator.of(context).pop(pickedColor);
+              },
             ),
           ],
         );

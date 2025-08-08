@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 
 /// 水印布局类型
 enum WatermarkLayoutType {
-  pureWhiteBorder('白色边框', '纯白边框', const {}),
-  darkWatermarkLeftLogo('normal(黑红配色)', '黑红配色', const {}),
-  backgroundBlurWithBorder('背景模糊+白框', '背景模糊白框', const {});
+  pureWhiteBorder('白色边框', '纯白边框', {}),
+  darkWatermarkLeftLogo('normal(黑红配色)', '黑红配色', {}),
+  backgroundBlurWithBorder('背景模糊+白框', '背景模糊白框', {});
 
   /// 扩展设置，用于存储额外的可调节参数
   final Map<String, dynamic> extraSettings;

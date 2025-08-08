@@ -978,8 +978,6 @@ class WatermarkProcessorFactory {
         return DarkWatermarkProcessor(config);
       case WatermarkLayoutType.backgroundBlurWithBorder:
         return BackgroundBlurWithBorderProcessor(config);
-      default:
-        throw UnsupportedError('Unsupported layout type: ${config.layoutType}');
     }
   }
 }
