@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:desktop_drop/desktop_drop.dart';
+import 'package:image_picker/image_picker.dart';
 import 'photo_watermark_provider.dart';
 import 'widgets/watermark_preview.dart';
 import 'widgets/watermark_settings.dart';
@@ -26,29 +27,45 @@ class _PhotoWatermarkScreenState extends State<PhotoWatermarkScreen> {
 
   Future<void> _pickFiles({bool multiple = false}) async {
     if (!mounted) return;
+    final provider = context.read<PhotoWatermarkProvider>();
+    List<File> files = [];
 
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['jpg', 'jpeg', 'png', 'heic', 'heif'],
-      allowMultiple: multiple,
-    );
-
-    if (result != null && result.files.isNotEmpty) {
-      if (!mounted) return;
-      final provider = context.read<PhotoWatermarkProvider>();
-
+    // Mobile-specific logic using image_picker for a native gallery experience
+    if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) {
+      final picker = ImagePicker();
       if (multiple) {
-        // 批处理模式
-        final files = result.files
+        final List<XFile> images = await picker.pickMultiImage();
+        files = images.map((xfile) => File(xfile.path)).toList();
+      } else {
+        final XFile? image = await picker.pickImage(
+          source: ImageSource.gallery,
+        );
+        if (image != null) {
+          files.add(File(image.path));
+        }
+      }
+    }
+    // Desktop-specific logic using file_picker
+    else {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['jpg', 'jpeg', 'png', 'heic', 'heif'],
+        allowMultiple: multiple,
+      );
+      if (result != null && result.files.isNotEmpty) {
+        files = result.files
             .where((f) => f.path != null)
             .map((f) => File(f.path!))
             .toList();
-        await provider.addBatchFiles(files);
-      } else {
-        // 单个文件模式
-        final file = File(result.files.first.path!);
-        await provider.loadImage(file);
       }
+    }
+
+    if (!mounted || files.isEmpty) return;
+
+    if (multiple) {
+      await provider.addBatchFiles(files);
+    } else {
+      await provider.loadImage(files.first);
     }
   }
 
@@ -81,34 +98,37 @@ class _PhotoWatermarkScreenState extends State<PhotoWatermarkScreen> {
               elevation: 0,
               backgroundColor: DesignTokens.backgroundSecondary,
               actions: [
-                // 输出目录按钮
-                Consumer<PhotoWatermarkProvider>(
-                  builder: (context, provider, _) {
-                    return TextButton.icon(
-                      onPressed: _pickOutputDirectory,
-                      icon: const Icon(Icons.folder_open),
-                      label: Text(
-                        provider.outputDirectory?.path
-                                .split(Platform.pathSeparator)
-                                .last ??
-                            '选择输出目录',
-                        style: DesignTokens.bodySmall,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    );
-                  },
-                ),
-                const SizedBox(width: DesignTokens.spacing8),
-                // 打开输出目录
-                IconButton(
-                  onPressed: () {
-                    context
-                        .read<PhotoWatermarkProvider>()
-                        .openOutputDirectory();
-                  },
-                  icon: const Icon(Icons.launch),
-                  tooltip: '打开输出目录',
-                ),
+                // Desktop-only buttons
+                if (Platform.isWindows || Platform.isLinux) ...[
+                  // 输出目录按钮
+                  Consumer<PhotoWatermarkProvider>(
+                    builder: (context, provider, _) {
+                      return TextButton.icon(
+                        onPressed: _pickOutputDirectory,
+                        icon: const Icon(Icons.folder_open),
+                        label: Text(
+                          provider.outputDirectory?.path
+                                  .split(Platform.pathSeparator)
+                                  .last ??
+                              '选择输出目录',
+                          style: DesignTokens.bodySmall,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(width: DesignTokens.spacing8),
+                  // 打开输出目录
+                  IconButton(
+                    onPressed: () {
+                      context
+                          .read<PhotoWatermarkProvider>()
+                          .openOutputDirectory();
+                    },
+                    icon: const Icon(Icons.launch),
+                    tooltip: '打开输出目录',
+                  ),
+                ],
                 const SizedBox(width: DesignTokens.spacing16),
               ],
               bottom: isDesktop
@@ -327,6 +347,30 @@ class _PhotoWatermarkScreenState extends State<PhotoWatermarkScreen> {
                       }),
                     ),
                   ),
+                  const SizedBox(height: DesignTokens.spacing12),
+                  // Status message display
+                  if (provider.status == ProcessingStatus.error &&
+                      provider.errorMessage != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8.0),
+                      child: Text(
+                        '错误: ${provider.errorMessage}',
+                        style: const TextStyle(color: Colors.red, fontSize: 12),
+                        textAlign: TextAlign.center,
+                      ),
+                    )
+                  else if (provider.status == ProcessingStatus.completed)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8.0),
+                      child: Text(
+                        '操作成功!',
+                        style: TextStyle(
+                          color: Colors.green[700],
+                          fontSize: 12,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
                 ],
               ),
             ),

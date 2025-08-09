@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.oldsun.camera_toolbox">
   <!-- Required for reading files from external storage -->
   <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+  <!-- Required for writing to external storage on older Android versions -->
+  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
   <!-- Required for reading images on Android 13 (API 33) and above -->
   <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
   <!-- Request broad file access on modern Android -->

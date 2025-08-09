@@ -4,7 +4,10 @@ import 'dart:collection';
 import 'dart:isolate';
 import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
+import 'package:gal/gal.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:path/path.dart' as path;
 import 'package:image/image.dart' as img;
 import 'models/watermark_config.dart';
@@ -14,7 +17,7 @@ import 'services/watermark_processor.dart';
 /// Isolate 请求数据 - 包含预处理的水印图像数据
 class _WatermarkRequest {
   final String inputFile;
-  final String outputFile;
+  final String? outputFile;
   final WatermarkConfig config;
   final String requestId;
   final Uint8List processedImageBytes;
@@ -23,7 +26,7 @@ class _WatermarkRequest {
 
   _WatermarkRequest({
     required this.inputFile,
-    required this.outputFile,
+    this.outputFile,
     required this.config,
     required this.requestId,
     required this.processedImageBytes,
@@ -37,8 +40,14 @@ class _WatermarkResult {
   final String inputFile;
   final bool success;
   final String? errorMessage;
+  final Uint8List? processedBytes;
 
-  _WatermarkResult(this.inputFile, this.success, {this.errorMessage});
+  _WatermarkResult(
+    this.inputFile,
+    this.success, {
+    this.errorMessage,
+    this.processedBytes,
+  });
 }
 
 // --- Isolate Entry Points ---
@@ -51,7 +60,7 @@ void _watermarkGenerator(SendPort sendPort) {
   receivePort.listen((dynamic message) async {
     if (message is _WatermarkRequest) {
       try {
-        debugPrint('Isolate: 开始保存 ${message.inputFile}');
+        debugPrint('Isolate: 开始处理 ${message.inputFile}');
 
         // 将RGBA字节数据转换为image包格式
         final processedImage = img.Image.fromBytes(
@@ -62,17 +71,22 @@ void _watermarkGenerator(SendPort sendPort) {
           numChannels: 4,
         );
 
-        // 编码为JPG并保存
+        // 编码为JPG
         final jpgBytes = img.encodeJpg(
           processedImage,
           quality: message.config.outputQuality,
         );
-        await File(message.outputFile).writeAsBytes(jpgBytes);
 
-        debugPrint('Isolate: 保存完成 ${message.inputFile}');
-        sendPort.send(_WatermarkResult(message.inputFile, true));
+        debugPrint('Isolate: 处理完成 ${message.inputFile}');
+        sendPort.send(
+          _WatermarkResult(
+            message.inputFile,
+            true,
+            processedBytes: Uint8List.fromList(jpgBytes),
+          ),
+        );
       } catch (e) {
-        debugPrint('Isolate: 保存失败 ${message.inputFile}: $e');
+        debugPrint('Isolate: 处理失败 ${message.inputFile}: $e');
         sendPort.send(
           _WatermarkResult(
             message.inputFile,
@@ -91,14 +105,14 @@ enum ProcessingStatus { idle, processing, completed, error }
 /// 批处理任务
 class BatchProcessTask {
   final File file;
-  final String outputPath;
+  final String? outputPath;
   ProcessingStatus status;
   String? errorMessage;
   double progress;
 
   BatchProcessTask({
     required this.file,
-    required this.outputPath,
+    this.outputPath,
     this.status = ProcessingStatus.idle,
     this.errorMessage,
     this.progress = 0.0,
@@ -397,6 +411,48 @@ class PhotoWatermarkProvider extends ChangeNotifier {
   }
 
   /// 保存当前图像
+  Future<bool> _requestStoragePermission() async {
+    PermissionStatus status;
+
+    if (Platform.isIOS || Platform.isMacOS) {
+      status = await Permission.photos.request();
+    } else if (Platform.isAndroid) {
+      final deviceInfo = await DeviceInfoPlugin().androidInfo;
+      if (deviceInfo.version.sdkInt >= 33) {
+        status = await Permission.photos.request();
+      } else {
+        status = await Permission.storage.request();
+      }
+    } else {
+      // Desktop platforms have no runtime permissions for this
+      return true;
+    }
+
+    // On iOS, `limited` access is still sufficient for saving to gallery.
+    if (status.isGranted || status.isLimited) {
+      return true;
+    }
+
+    if (status.isPermanentlyDenied) {
+      // Guide user to app settings
+      await openAppSettings();
+    }
+
+    return false;
+  }
+
+  /// Saves the given JPG bytes to the appropriate location based on the platform.
+  Future<void> _saveJpgBytes(Uint8List jpgBytes, String fileName) async {
+    if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) {
+      await Gal.putImageBytes(jpgBytes, name: fileName);
+    } else {
+      // Desktop logic
+      await _ensureOutputDirectory();
+      final outputPath = path.join(_outputDirectory!.path, fileName);
+      await File(outputPath).writeAsBytes(jpgBytes);
+    }
+  }
+
   Future<void> saveCurrentImage() async {
     if (_currentImage == null || _previewImage == null) return;
 
@@ -404,18 +460,21 @@ class PhotoWatermarkProvider extends ChangeNotifier {
       _status = ProcessingStatus.processing;
       notifyListeners();
 
-      // 确保输出目录已设置
-      await _ensureOutputDirectory();
+      final hasPermission = await _requestStoragePermission();
+      if (!hasPermission) {
+        throw Exception('存储权限被拒绝');
+      }
 
-      // 生成输出文件名
+      final jpgBytes = await _getImageAsJpgBytes(_previewImage!);
+      if (jpgBytes == null) {
+        throw Exception('无法生成JPG数据');
+      }
+
       final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final outputFileName =
+      final fileName =
           '${path.basenameWithoutExtension(_currentImage!.sourceFile.path)}_watermark_$timestamp.jpg';
-      final outputPath = path.join(_outputDirectory!.path, outputFileName);
 
-      // 保存为JPG格式
-      await _saveImageAsJpg(_previewImage!, outputPath);
-
+      await _saveJpgBytes(jpgBytes, fileName);
       _status = ProcessingStatus.completed;
       notifyListeners();
     } catch (e) {
@@ -428,30 +487,33 @@ class PhotoWatermarkProvider extends ChangeNotifier {
   /// 添加批处理文件
   Future<void> addBatchFiles(List<File> files) async {
     debugPrint('addBatchFiles 被调用，文件数量: ${files.length}');
+    final isDesktop = Platform.isWindows || Platform.isLinux;
 
-    // 确保输出目录已设置，优先使用用户设置的目录
-    await _ensureOutputDirectory();
+    // 仅在桌面端需要预设输出目录
+    if (isDesktop) {
+      await _ensureOutputDirectory();
+    }
 
     int addedCount = 0;
     for (final file in files) {
       debugPrint('处理文件: ${file.path}');
 
-      // 检查文件是否存在
       if (!await file.exists()) {
         debugPrint('文件不存在: ${file.path}');
         continue;
       }
-
-      // 检查是否已存在
       if (_batchTasks.any((t) => t.file.path == file.path)) {
         debugPrint('文件已存在于列表中: ${file.path}');
         continue;
       }
 
-      // 生成输出路径
-      final outputFileName =
-          '${path.basenameWithoutExtension(file.path)}_watermark.jpg';
-      final outputPath = path.join(_outputDirectory!.path, outputFileName);
+      // 桌面端生成完整输出路径，移动端则留空，由ImageGallerySaver处理
+      String? outputPath;
+      if (isDesktop) {
+        final outputFileName =
+            '${path.basenameWithoutExtension(file.path)}_watermark.jpg';
+        outputPath = path.join(_outputDirectory!.path, outputFileName);
+      }
 
       _batchTasks.add(BatchProcessTask(file: file, outputPath: outputPath));
       addedCount++;
@@ -459,8 +521,9 @@ class PhotoWatermarkProvider extends ChangeNotifier {
     }
 
     debugPrint('总共添加了 $addedCount 个文件到批处理列表');
-    debugPrint('当前批处理列表中有 ${_batchTasks.length} 个文件');
-    debugPrint('使用输出目录: ${_outputDirectory!.path}');
+    if (isDesktop) {
+      debugPrint('使用输出目录: ${_outputDirectory!.path}');
+    }
 
     notifyListeners();
   }
@@ -492,7 +555,19 @@ class PhotoWatermarkProvider extends ChangeNotifier {
     _batchProcessingCancelled = false;
     notifyListeners();
 
-    await _ensureOutputDirectory();
+    final hasPermission = await _requestStoragePermission();
+    if (!hasPermission) {
+      _status = ProcessingStatus.error;
+      _errorMessage = '存储权限被拒绝，无法开始批处理';
+      notifyListeners();
+      return;
+    }
+
+    // 仅在桌面端需要预设输出目录
+    // Desktop platforms that use file paths need an output directory.
+    if (Platform.isWindows || Platform.isLinux) {
+      await _ensureOutputDirectory();
+    }
     await _initializeIsolates();
 
     // 重置任务状态
@@ -625,13 +700,11 @@ class PhotoWatermarkProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 保存UI图像为JPG格式
-  Future<void> _saveImageAsJpg(ui.Image image, String outputPath) async {
-    // 获取图像的RGBA数据
+  /// 将UI图像转换为JPG字节数据
+  Future<Uint8List?> _getImageAsJpgBytes(ui.Image image) async {
     final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
-    if (byteData == null) return;
+    if (byteData == null) return null;
 
-    // 转换为image包的格式
     final imgImage = img.Image.fromBytes(
       width: image.width,
       height: image.height,
@@ -640,12 +713,9 @@ class PhotoWatermarkProvider extends ChangeNotifier {
       numChannels: 4,
     );
 
-    // 编码为JPG格式
-    final jpgBytes = img.encodeJpg(imgImage, quality: _config.outputQuality);
-
-    // 保存文件
-    final file = File(outputPath);
-    await file.writeAsBytes(jpgBytes);
+    return Uint8List.fromList(
+      img.encodeJpg(imgImage, quality: _config.outputQuality),
+    );
   }
 
   /// 更新总体进度
@@ -711,24 +781,29 @@ class PhotoWatermarkProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 打开输出目录
+  /// 打开输出目录或最后保存的文件
   Future<void> openOutputDirectory() async {
-    if (_outputDirectory != null && await _outputDirectory!.exists()) {
-      if (Platform.isWindows) {
-        await Process.run('explorer', [_outputDirectory!.path]);
-      } else if (Platform.isMacOS) {
-        await Process.run('open', [_outputDirectory!.path]);
-      } else if (Platform.isLinux) {
-        await Process.run('xdg-open', [_outputDirectory!.path]);
+    // On mobile, we can't open a directory or a specific file from gallery.
+    // This function will only work on desktop.
+    if (Platform.isWindows || Platform.isLinux) {
+      if (_outputDirectory != null && await _outputDirectory!.exists()) {
+        final path = _outputDirectory!.path;
+        if (Platform.isWindows) {
+          await Process.run('explorer', [path]);
+        } else if (Platform.isMacOS) {
+          await Process.run('open', [path]);
+        } else if (Platform.isLinux) {
+          await Process.run('xdg-open', [path]);
+        }
       }
     }
   }
 
   /// 根据CPU核心数初始化设置
   void _initCpuBasedSettings() {
-    final cpuCores = Platform.isWindows || Platform.isMacOS || Platform.isLinux
-        ? Platform.numberOfProcessors
-        : 2; // Default for mobile
+    final cpuCores = kIsWeb
+        ? 2 // Web doesn't have access to this, default to 2.
+        : Platform.numberOfProcessors;
 
     // Isolate数量 = CPU核心数 / 2，最少1个，最多6个
     _isolateCount = (cpuCores / 2).ceil().clamp(1, 6);
@@ -777,7 +852,7 @@ class PhotoWatermarkProvider extends ChangeNotifier {
   }
 
   /// 处理水印结果
-  void _handleWatermarkResult(_WatermarkResult result) {
+  void _handleWatermarkResult(_WatermarkResult result) async {
     _processingCount--;
     _pendingTasks.remove(result.inputFile);
 
@@ -787,13 +862,23 @@ class PhotoWatermarkProvider extends ChangeNotifier {
 
     if (taskIndex != -1) {
       final task = _batchTasks[taskIndex];
-      if (result.success) {
-        task.status = ProcessingStatus.completed;
-        task.progress = 1.0;
-        debugPrint('任务完成: ${result.inputFile}');
+      if (result.success && result.processedBytes != null) {
+        try {
+          final fileName =
+              '${path.basenameWithoutExtension(task.file.path)}_watermark.jpg';
+
+          await _saveJpgBytes(result.processedBytes!, fileName);
+          task.status = ProcessingStatus.completed;
+          task.progress = 1.0;
+          debugPrint('任务完成并已保存: ${result.inputFile}');
+        } catch (e) {
+          task.status = ProcessingStatus.error;
+          task.errorMessage = '保存失败: $e';
+          debugPrint('任务保存失败: ${result.inputFile}, 错误: $e');
+        }
       } else {
         task.status = ProcessingStatus.error;
-        task.errorMessage = result.errorMessage;
+        task.errorMessage = result.errorMessage ?? '未知处理错误';
         debugPrint('任务失败: ${result.inputFile}, 错误: ${result.errorMessage}');
       }
       _updateOverallProgress();

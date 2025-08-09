@@ -1,5 +1,5 @@
 package com.oldsun.camera_toolbox
 
-import io.flutter.embedding.android.FlutterFragmentActivity
+import io.flutter.embedding.android.FlutterActivity
 
-class MainActivity: FlutterFragmentActivity()
+class MainActivity: FlutterActivity()

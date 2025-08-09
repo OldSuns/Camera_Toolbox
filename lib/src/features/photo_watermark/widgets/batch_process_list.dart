@@ -239,7 +239,9 @@ class _BatchTaskItem extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.end,
           children: [
             InkWell(
-              onTap: () => _openOutputFile(),
+              onTap: (Platform.isAndroid || Platform.isIOS)
+                  ? null
+                  : () => _openOutputFile(),
               borderRadius: BorderRadius.circular(16),
               child: Container(
                 width: 32,
@@ -248,7 +250,9 @@ class _BatchTaskItem extends StatelessWidget {
                 child: Icon(
                   Icons.folder_open,
                   size: 18,
-                  color: DesignTokens.textSecondary,
+                  color: (Platform.isAndroid || Platform.isIOS)
+                      ? DesignTokens.textTertiary
+                      : DesignTokens.textSecondary,
                 ),
               ),
             ),
@@ -276,7 +280,9 @@ class _BatchTaskItem extends StatelessWidget {
   }
 
   void _openOutputFile() {
-    final outputFile = File(task.outputPath);
+    // This should only be called on desktop.
+    if (task.outputPath == null) return;
+    final outputFile = File(task.outputPath!);
     if (outputFile.existsSync()) {
       final directory = outputFile.parent.path;
       if (Platform.isWindows) {
