@@ -13,24 +13,45 @@ class WatermarkSettings extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer<PhotoWatermarkProvider>(
       builder: (context, provider, _) {
-        return ListView(
-          padding: const EdgeInsets.all(DesignTokens.spacing16),
-          children: [
-            // 布局类型选择
-            _buildLayoutTypeSection(context, provider),
-            const SizedBox(height: DesignTokens.spacing16),
+        // 使用LayoutBuilder来决定是否应用Card样式
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            // 在移动端视图（或任何父级提供有限宽度的地方），我们不希望有额外的Card和padding
+            final bool isMobileView =
+                constraints.maxWidth < DesignTokens.sidebarWidth - 32;
 
-            // Logo设置
-            _buildLogoSection(context, provider),
-            const SizedBox(height: DesignTokens.spacing16),
+            final content = ListView(
+              padding: isMobileView
+                  ? const EdgeInsets.all(DesignTokens.spacing16)
+                  : EdgeInsets.zero,
+              children: [
+                // 布局类型选择
+                _buildLayoutTypeSection(context, provider),
+                const SizedBox(height: DesignTokens.spacing16),
 
-            // 四角文字设置
-            _buildTextContentSection(context, provider),
-            const SizedBox(height: DesignTokens.spacing16),
+                // Logo设置
+                _buildLogoSection(context, provider),
+                const SizedBox(height: DesignTokens.spacing16),
 
-            // 全局设置
-            _buildGlobalSettingsSection(context, provider),
-          ],
+                // 四角文字设置
+                _buildTextContentSection(context, provider),
+                const SizedBox(height: DesignTokens.spacing16),
+
+                // 全局设置
+                _buildGlobalSettingsSection(context, provider),
+              ],
+            );
+
+            if (isMobileView) {
+              return content;
+            }
+
+            // 在桌面视图中，保持原有的padding
+            return Padding(
+              padding: const EdgeInsets.all(DesignTokens.spacing16),
+              child: content,
+            );
+          },
         );
       },
     );

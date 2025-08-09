@@ -663,9 +663,20 @@ class PhotoWatermarkProvider extends ChangeNotifier {
   /// 确保输出目录已设置
   Future<void> _ensureOutputDirectory() async {
     if (_outputDirectory == null) {
-      // 如果用户没有设置输出目录，使用默认目录
-      final appDir = await getApplicationDocumentsDirectory();
-      _outputDirectory = Directory(path.join(appDir.path, 'watermark_output'));
+      Directory? baseDir;
+      try {
+        // 优先使用“下载”文件夹作为默认输出位置，因为它是一个标准、可靠的用户目录
+        if (Platform.isMacOS || Platform.isLinux || Platform.isWindows) {
+          baseDir = await getDownloadsDirectory();
+        }
+      } catch (e) {
+        debugPrint('获取下载目录失败: $e');
+      }
+
+      // 如果获取下载目录失败（例如在某些特殊系统或移动端），则回退到应用文档目录
+      baseDir ??= await getApplicationDocumentsDirectory();
+
+      _outputDirectory = Directory(path.join(baseDir.path, 'watermark_output'));
     }
 
     // 确保目录存在
@@ -714,21 +725,16 @@ class PhotoWatermarkProvider extends ChangeNotifier {
   }
 
   /// 根据CPU核心数初始化设置
-  /// 根据CPU核心数初始化设置
   void _initCpuBasedSettings() {
     final cpuCores = Platform.isWindows || Platform.isMacOS || Platform.isLinux
         ? Platform.numberOfProcessors
         : 2; // Default for mobile
 
-    // Isolate数量 = CPU核心数 / 2，最少1个，最多4个
-    _isolateCount = (cpuCores / 2).ceil().clamp(1, 4);
+    // Isolate数量 = CPU核心数 / 2，最少1个，最多6个
+    _isolateCount = (cpuCores / 2).ceil().clamp(1, 6);
 
-    // 最大并发数 = CPU核心数 - 1，最少1个，最多6个
-    _maxConcurrent = (cpuCores - 1).clamp(1, 6);
-
-    debugPrint(
-      'CPU Cores: $cpuCores, Isolate Count: $_isolateCount, Max Concurrent: $_maxConcurrent',
-    );
+    // 最大并发数 = CPU核心数 - 1，最少1个，最多12个
+    _maxConcurrent = (cpuCores - 1).clamp(1, 12);
   }
 
   /// 初始化多个Isolate

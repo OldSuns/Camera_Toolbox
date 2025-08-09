@@ -37,7 +37,7 @@ class WatermarkPreview extends StatelessWidget {
                 // 计算缩放比例
                 final scaleX = containerWidth / imageWidth;
                 final scaleY = containerHeight / imageHeight;
-                final scale = math.min(scaleX, scaleY) * 0.9; // 留出一些边距
+                final scale = math.min(scaleX, scaleY) * 0.95; // 留出一些边距
 
                 // 计算缩放后的尺寸
                 final scaledWidth = imageWidth * scale;
