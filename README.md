@@ -1,6 +1,6 @@
 # OldSun相机工具箱
 
-<img width="1472" height="986" alt="image" src="https://github.com/user-attachments/assets/e21f47bc-435e-4326-bfdd-9ba6b0a3f2f4" />
+<img width="1932" height="984" alt="image" src="https://github.com/user-attachments/assets/b2d082c9-d9dc-4536-af1a-5e358939af96" />
 
 **OldSun相机工具箱** 是一款专为摄影爱好者和专业摄影师设计的跨平台桌面应用。它提供了一系列实用工具，旨在简化您的照片管理和处理工作流程。
 

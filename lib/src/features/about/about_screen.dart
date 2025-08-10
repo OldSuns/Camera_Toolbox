@@ -142,15 +142,15 @@ class _AboutScreenState extends State<AboutScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                '版本 V1.2.5${_patchNumber == null ? '' : ' Patch $_patchNumber'}',
+                '版本 V1.2.6${_patchNumber == null ? '' : ' Patch $_patchNumber'}',
                 style: const TextStyle(fontSize: 16, color: Colors.grey),
               ),
               const SizedBox(height: 24),
               const Text(
                 '一款基础相机工具应用。\n'
                 '基于Flutter+Dart的跨平台应用\n\n'
-                '更新日志：V1.2.5 优化“照片边框水印”功能实现逻辑\n'
-                '优化程序移动端表现',
+                '更新日志：V1.2.6 紧急修复\n'
+                '修复了“照片水印”功能中光圈值匹配错误的问题',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 16),
               ),

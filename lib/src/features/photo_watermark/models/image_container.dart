@@ -409,29 +409,62 @@ class ImageContainer {
           final value = values.first;
           if (value is Ratio) {
             final fValue = value.numerator / value.denominator;
-            // 保留一位小数
-            return fValue.toStringAsFixed(1);
+            // 验证光圈值合理性并保留一位小数
+            if (_isValidApertureValue(fValue)) {
+              return fValue.toStringAsFixed(1);
+            }
           } else if (value is int || value is double) {
             final fValue = value is int ? value.toDouble() : value as double;
-            // 保留一位小数
-            return fValue.toStringAsFixed(1);
+            // 验证光圈值合理性并保留一位小数
+            if (_isValidApertureValue(fValue)) {
+              return fValue.toStringAsFixed(1);
+            }
           }
         }
         // 如果values不可用，使用printable
         final printable = tag.printable.trim();
-        // 尝试解析数字
+
+        // 首先尝试解析分数格式（如 "71/10" 表示 7.1）
+        if (printable.contains('/')) {
+          final parts = printable.split('/');
+          if (parts.length == 2) {
+            final numerator = double.tryParse(parts[0]);
+            final denominator = double.tryParse(parts[1]);
+            if (numerator != null && denominator != null && denominator != 0) {
+              final fValue = numerator / denominator;
+              if (_isValidApertureValue(fValue)) {
+                return fValue.toStringAsFixed(1);
+              }
+            }
+          }
+        }
+
+        // 尝试解析小数格式
         final match = RegExp(r'(\d+\.?\d*)').firstMatch(printable);
         if (match != null) {
-          final fValue = double.parse(match.group(1)!);
-          // 保留一位小数
-          return fValue.toStringAsFixed(1);
+          final fValue = double.tryParse(match.group(1)!);
+          if (fValue != null && _isValidApertureValue(fValue)) {
+            return fValue.toStringAsFixed(1);
+          }
         }
+
+        // 如果以上都失败，返回原始字符串（移除多余字符）
         if (printable.isNotEmpty) {
-          return printable;
+          // 尝试提取合理的数字部分
+          final cleanValue = printable.replaceAll(RegExp(r'[^\d./]'), '');
+          if (cleanValue.isNotEmpty) {
+            return cleanValue;
+          }
         }
       }
     }
     return '';
+  }
+
+  /// 验证光圈值是否合理
+  /// 通常光圈值范围在 f/0.5 到 f/32 之间
+  static bool _isValidApertureValue(double value) {
+    return value >= 0.5 && value <= 32.0;
   }
 
   static String _extractExposureTime(Map<String, IfdTag> exifData) {
