@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:data_table_2/data_table_2.dart';
 import 'package:provider/provider.dart';
@@ -406,6 +407,10 @@ class _ImageCompressScreenState extends State<ImageCompressScreen> {
     ImageCompressService service, {
     bool isMobile = false,
   }) {
+    // 检查是否为移动端或macOS平台
+    final bool isMobileOrMacOS =
+        Platform.isAndroid || Platform.isIOS || Platform.isMacOS;
+
     return ListView(
       children: [
         const Text('压缩选项', style: TextStyle(fontWeight: FontWeight.bold)),
@@ -453,45 +458,48 @@ class _ImageCompressScreenState extends State<ImageCompressScreen> {
           ),
           keyboardType: TextInputType.number,
         ),
-        const SizedBox(height: 24),
 
-        // 输出设置
-        const Text('输出', style: TextStyle(fontWeight: FontWeight.bold)),
-        const SizedBox(height: 16),
-        if (!_outputToOriginalDir)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8.0),
-            child: ElevatedButton.icon(
-              onPressed: _selectOutputDirectory,
-              icon: const Icon(Icons.folder_open),
-              label: Text(
-                _selectedOutputDirectory != null ? '已选择目录' : '选择输出目录',
+        // 只在桌面端显示输出设置
+        if (!isMobileOrMacOS) ...[
+          const SizedBox(height: 24),
+          // 输出设置
+          const Text('输出', style: TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 16),
+          if (!_outputToOriginalDir)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8.0),
+              child: ElevatedButton.icon(
+                onPressed: _selectOutputDirectory,
+                icon: const Icon(Icons.folder_open),
+                label: Text(
+                  _selectedOutputDirectory != null ? '已选择目录' : '选择输出目录',
+                ),
               ),
             ),
-          ),
-        CheckboxListTile(
-          title: const Text('输出到原目录'),
-          value: _outputToOriginalDir,
-          onChanged: (value) {
-            setState(() {
-              _outputToOriginalDir = value ?? false;
-            });
-          },
-          controlAffinity: ListTileControlAffinity.leading,
-          contentPadding: EdgeInsets.zero,
-        ),
-        if (_outputToOriginalDir)
           CheckboxListTile(
-            title: const Text('覆盖原文件'),
-            value: _overwriteOriginal,
+            title: const Text('输出到原目录'),
+            value: _outputToOriginalDir,
             onChanged: (value) {
               setState(() {
-                _overwriteOriginal = value ?? false;
+                _outputToOriginalDir = value ?? false;
               });
             },
             controlAffinity: ListTileControlAffinity.leading,
             contentPadding: EdgeInsets.zero,
           ),
+          if (_outputToOriginalDir)
+            CheckboxListTile(
+              title: const Text('覆盖原文件'),
+              value: _overwriteOriginal,
+              onChanged: (value) {
+                setState(() {
+                  _overwriteOriginal = value ?? false;
+                });
+              },
+              controlAffinity: ListTileControlAffinity.leading,
+              contentPadding: EdgeInsets.zero,
+            ),
+        ],
       ],
     );
   }

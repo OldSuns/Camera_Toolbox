@@ -6,6 +6,8 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as path;
 import 'package:simple_native_image_compress/simple_native_image_compress.dart';
+import 'package:gal/gal.dart';
+import '../../shared/services/image_picker_service.dart';
 
 /// 图像文件模型
 class ImageFile {
@@ -136,6 +138,7 @@ class _CompressionResult {
   final String? compressedFilePath;
   final int? compressedSize;
   final bool skipped;
+  final Uint8List? compressedBytes;
 
   _CompressionResult({
     required this.fileName,
@@ -144,6 +147,7 @@ class _CompressionResult {
     this.compressedFilePath,
     this.compressedSize,
     this.skipped = false,
+    this.compressedBytes,
   });
 }
 
@@ -236,6 +240,7 @@ class ImageCompressService extends ChangeNotifier {
             compressedFilePath: message['compressedFilePath'] as String?,
             compressedSize: message['compressedSize'] as int?,
             skipped: message['skipped'] as bool? ?? false,
+            compressedBytes: message['compressedBytes'] as Uint8List?,
           );
           _processingCount--;
           _processingFiles.remove(result.fileName);
@@ -352,25 +357,48 @@ class ImageCompressService extends ChangeNotifier {
   }
 
   /// 处理压缩结果
-  void _handleCompressionResult(_CompressionResult result) {
+  void _handleCompressionResult(_CompressionResult result) async {
     final imageIndex = _selectedImages.indexWhere(
       (img) => img.name == result.fileName,
     );
 
     if (imageIndex != -1) {
       if (result.success) {
+        String? finalOutputPath = result.compressedFilePath;
+
+        // 如果是移动端且有压缩字节数据，则保存到相册
+        if ((Platform.isAndroid || Platform.isIOS || Platform.isMacOS) &&
+            result.compressedBytes != null &&
+            !result.skipped) {
+          try {
+            final fileName =
+                '${path.basenameWithoutExtension(result.fileName)}_compressed_${DateTime.now().millisecondsSinceEpoch}.jpg';
+            await Gal.putImageBytes(result.compressedBytes!, name: fileName);
+            finalOutputPath = '已保存到相册';
+            _statusMessage = '已完成并保存到相册: ${result.fileName}';
+          } catch (e) {
+            debugPrint('保存到相册失败: $e');
+            _statusMessage = '压缩完成但保存到相册失败: ${result.fileName}';
+          }
+        }
+
         _selectedImages[imageIndex] = _selectedImages[imageIndex].copyWith(
           progress: 1.0,
           isCompressing: false,
           isCompleted: true,
-          compressedFilePath: result.compressedFilePath,
+          compressedFilePath: finalOutputPath,
           compressedSizeInBytes: result.compressedSize,
           status: result.skipped ? 'skipped' : 'completed',
         );
         _completedCount++;
-        _statusMessage = result.skipped
-            ? '跳过: ${result.fileName} (无需压缩)'
-            : '已完成: ${result.fileName}';
+
+        if (result.skipped) {
+          _statusMessage = '跳过: ${result.fileName} (无需压缩)';
+        } else if (finalOutputPath == '已保存到相册') {
+          // 状态消息已在上面设置
+        } else {
+          _statusMessage = '已完成: ${result.fileName}';
+        }
       } else {
         _selectedImages[imageIndex] = _selectedImages[imageIndex].copyWith(
           progress: 0.0,
@@ -390,7 +418,11 @@ class ImageCompressService extends ChangeNotifier {
           _taskQueue.isEmpty &&
           _processingCount == 0) {
         _isCompressing = false;
-        _statusMessage = '压缩完成！共处理 ${_selectedImages.length} 张图片';
+        final platform =
+            Platform.isAndroid || Platform.isIOS || Platform.isMacOS
+            ? '并已保存到相册'
+            : '';
+        _statusMessage = '压缩完成！共处理 ${_selectedImages.length} 张图片$platform';
         // 🔧 压缩完成后立即销毁Isolate池
         _destroyIsolates();
         notifyListeners();
@@ -454,47 +486,96 @@ class ImageCompressService extends ChangeNotifier {
   /// 选择图片文件（只允许JPG格式）
   Future<void> pickImages() async {
     try {
-      final result = await FilePicker.platform.pickFiles(
-        allowMultiple: true,
-        type: FileType.custom,
-        allowedExtensions: ['jpg', 'jpeg', 'JPG', 'JPEG'],
-        withData: false,
-        withReadStream: false,
-      );
+      _statusMessage = '正在选择图片...';
+      notifyListeners();
 
-      if (result != null && result.files.isNotEmpty) {
+      List<File> selectedFiles = [];
+
+      // 检查是否为移动端平台或MacOS
+      if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) {
+        // 移动端：优先从相册选择多张图片，失败则使用文件选择器
+        try {
+          final galleryFiles =
+              await ImagePickerService.pickMultipleImagesFromGallery();
+          if (galleryFiles.isNotEmpty) {
+            for (final file in galleryFiles) {
+              if (_isValidImageFile(file)) {
+                selectedFiles.add(file);
+              }
+            }
+          }
+        } catch (e) {
+          debugPrint('从相册选择失败，尝试文件选择器: $e');
+          // 相册选择失败，使用文件选择器
+          final filePickerFile = await ImagePickerService.pickImageFromFile();
+          if (filePickerFile != null && _isValidImageFile(filePickerFile)) {
+            selectedFiles.add(filePickerFile);
+          }
+        }
+      } else {
+        // 桌面端：使用原有的文件选择器逻辑
+        final result = await FilePicker.platform.pickFiles(
+          allowMultiple: true,
+          type: FileType.custom,
+          allowedExtensions: ['jpg', 'jpeg', 'JPG', 'JPEG'],
+          withData: false,
+          withReadStream: false,
+        );
+
+        if (result != null && result.files.isNotEmpty) {
+          for (final file in result.files) {
+            if (file.path != null) {
+              final imageFile = File(file.path!);
+              if (_isValidImageFile(imageFile)) {
+                selectedFiles.add(imageFile);
+              }
+            }
+          }
+        }
+      }
+
+      if (selectedFiles.isNotEmpty) {
         _statusMessage = '正在分析选中的图片...';
         notifyListeners();
 
         final List<ImageFile> newImages = [];
 
-        for (final file in result.files) {
-          if (file.path != null) {
-            try {
-              final imageFile = await _analyzeImageFile(file.path!);
-              if (imageFile != null) {
-                // 检查是否已经存在相同的文件
-                final exists = _selectedImages.any(
-                  (img) => img.filePath == imageFile.filePath,
-                );
-                if (!exists) {
-                  newImages.add(imageFile);
-                }
+        for (final file in selectedFiles) {
+          try {
+            final imageFile = await _analyzeImageFile(file.path);
+            if (imageFile != null) {
+              // 检查是否已经存在相同的文件
+              final exists = _selectedImages.any(
+                (img) => img.filePath == imageFile.filePath,
+              );
+              if (!exists) {
+                newImages.add(imageFile);
               }
-            } catch (e) {
-              debugPrint('分析图片文件失败: ${file.path}, 错误: $e');
             }
+          } catch (e) {
+            debugPrint('分析图片文件失败: ${file.path}, 错误: $e');
           }
         }
 
         _selectedImages.addAll(newImages);
         _statusMessage = '已添加 ${newImages.length} 张图片';
         notifyListeners();
+      } else {
+        _statusMessage = '未选择任何图片';
+        notifyListeners();
       }
     } catch (e) {
       _statusMessage = '选择图片失败: $e';
       notifyListeners();
     }
+  }
+
+  /// 验证图片文件是否有效
+  bool _isValidImageFile(File file) {
+    if (!file.existsSync()) return false;
+
+    final extension = path.extension(file.path).toLowerCase();
+    return ['.jpg', '.jpeg'].contains(extension);
   }
 
   /// 分析图片文件信息
@@ -741,6 +822,7 @@ class ImageCompressService extends ChangeNotifier {
                   'compressedFilePath': result['outputPath'] as String,
                   'compressedSize': result['compressedSize'] as int,
                   'skipped': result['skipped'] as bool? ?? false,
+                  'compressedBytes': result['compressedBytes'] as Uint8List?,
                 });
               } catch (e) {
                 debugPrint('发送成功结果失败: $e');
@@ -792,22 +874,6 @@ class ImageCompressService extends ChangeNotifier {
         return {'success': false, 'error': '文件不存在'};
       }
 
-      // 确定输出路径
-      String outputPath;
-      if (config.outputToOriginalDir) {
-        if (config.overwriteOriginal) {
-          outputPath = filePath;
-        } else {
-          final dir = path.dirname(filePath);
-          final nameWithoutExt = path.basenameWithoutExtension(filePath);
-          outputPath = path.join(dir, '${nameWithoutExt}_compressed.jpg');
-        }
-      } else {
-        final outputDir = config.outputDirectory ?? path.dirname(filePath);
-        final fileName = path.basenameWithoutExtension(filePath);
-        outputPath = path.join(outputDir, '${fileName}_compressed.jpg');
-      }
-
       // 执行压缩
       Uint8List? compressedBytes;
 
@@ -843,19 +909,46 @@ class ImageCompressService extends ChangeNotifier {
           'skipped': true,
           'outputPath': filePath,
           'compressedSize': inputFile.lengthSync(),
+          'compressedBytes': null, // 跳过时不返回字节数据
         };
       }
 
-      // 保存压缩后的文件
-      final outputFile = File(outputPath);
-      await outputFile.create(recursive: true);
-      await outputFile.writeAsBytes(compressedBytes);
+      // 根据平台选择保存方式
+      String outputPath;
+      if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) {
+        // 移动端：保存到相册，返回特殊标记
+        outputPath = 'gallery_saved'; // 特殊标记表示已保存到相册
+      } else {
+        // 桌面端：保存到文件系统
+        if (config.outputToOriginalDir) {
+          if (config.overwriteOriginal) {
+            outputPath = filePath;
+          } else {
+            final dir = path.dirname(filePath);
+            final nameWithoutExt = path.basenameWithoutExtension(filePath);
+            outputPath = path.join(dir, '${nameWithoutExt}_compressed.jpg');
+          }
+        } else {
+          final outputDir = config.outputDirectory ?? path.dirname(filePath);
+          final fileName = path.basenameWithoutExtension(filePath);
+          outputPath = path.join(outputDir, '${fileName}_compressed.jpg');
+        }
+
+        // 桌面端直接保存文件
+        final outputFile = File(outputPath);
+        await outputFile.create(recursive: true);
+        await outputFile.writeAsBytes(compressedBytes);
+      }
 
       return {
         'success': true,
         'skipped': false,
         'outputPath': outputPath,
         'compressedSize': compressedBytes.length,
+        'compressedBytes':
+            (Platform.isAndroid || Platform.isIOS || Platform.isMacOS)
+            ? compressedBytes
+            : null, // 移动端返回字节数据用于保存到相册
       };
     } catch (e) {
       return {'success': false, 'error': e.toString()};

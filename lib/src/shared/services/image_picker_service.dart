@@ -55,6 +55,27 @@ class ImagePickerService {
     }
   }
 
+  /// 从相册选择多张图片
+  static Future<List<File>> pickMultipleImagesFromGallery() async {
+    try {
+      // 首先检查和请求权限
+      final status = await Permission.photos.request();
+      if (status.isGranted || status.isLimited) {
+        final picker = ImagePicker();
+        final pickedFiles = await picker.pickMultiImage(imageQuality: 100);
+
+        if (pickedFiles.isNotEmpty) {
+          return pickedFiles.map((file) => File(file.path)).toList();
+        }
+      } else {
+        throw Exception('相册权限被拒绝');
+      }
+      return [];
+    } catch (e) {
+      throw Exception('无法访问相册: ${e.toString()}');
+    }
+  }
+
   /// 使用文件选择器选择图片
   static Future<File?> pickImageFromFile() async {
     try {
