@@ -9,6 +9,14 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "4.0.7"
+  args:
+    dependency: transitive
+    description:
+      name: args
+      sha256: d0481093c50b1da8910eb0bb301626d4d8eb7284aa739614d2b394ee09e3ea04
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "2.7.0"
   async:
     dependency: transitive
     description:
@@ -33,6 +41,14 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "0.6.0"
+  build_cli_annotations:
+    dependency: transitive
+    description:
+      name: build_cli_annotations
+      sha256: b59d2769769efd6c9ff6d4c4cede0be115a566afc591705c2040b707534b1172
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "2.1.0"
   characters:
     dependency: transitive
     description:
@@ -73,6 +89,14 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "3.0.6"
+  data_table_2:
+    dependency: "direct main"
+    description:
+      name: data_table_2
+      sha256: b8dd157e4efe5f2beef092c9952a254b2192cf76a26ad1c6aa8b06c8b9d665da
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "2.6.0"
   desktop_drop:
     dependency: "direct main"
     description:
@@ -203,6 +227,14 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "2.0.28"
+  flutter_rust_bridge:
+    dependency: transitive
+    description:
+      name: flutter_rust_bridge
+      sha256: b416ff56002789e636244fb4cc449f587656eff995e5a7169457eb0593fcaddb
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "2.10.0"
   flutter_test:
     dependency: "direct dev"
     description: flutter
@@ -661,6 +693,14 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "2.0.4"
+  simple_native_image_compress:
+    dependency: "direct main"
+    description:
+      name: simple_native_image_compress
+      sha256: f6911d7a3b3029871fe87014e56d14c605b25e4a401550c2ea60060db14e526a
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "3.0.2"
   sky_engine:
     dependency: transitive
     description: flutter

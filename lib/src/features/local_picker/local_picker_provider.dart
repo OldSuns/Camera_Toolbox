@@ -143,9 +143,11 @@ class LocalPickerProvider with ChangeNotifier {
   final int _batchSize = 3; // 减少批量大小，提高响应性
   Timer? _batchTimer;
 
+  // 延迟初始化标志位
+  bool _isolatesInitialized = false;
+
   LocalPickerProvider() {
     _initCpuBasedSettings();
-    _initIsolates();
     _initCacheDir();
   }
 
@@ -189,8 +191,15 @@ class LocalPickerProvider with ChangeNotifier {
     return '${md5.convert(utf8.encode(path)).toString()}.jpg';
   }
 
+  /// 确保Isolate已初始化（延迟初始化）
+  Future<void> ensureIsolatesInitialized() async {
+    if (_isolatesInitialized) return;
+    await _initIsolates();
+    _isolatesInitialized = true;
+  }
+
   /// 初始化多个Isolate
-  void _initIsolates() async {
+  Future<void> _initIsolates() async {
     for (int i = 0; i < _isolateCount; i++) {
       final receivePort = ReceivePort();
       final completer = Completer<SendPort>();
@@ -237,17 +246,6 @@ class LocalPickerProvider with ChangeNotifier {
     }
     _isolates.clear();
     super.dispose();
-  }
-
-  Future<void> _resetIsolates() async {
-    for (final isolate in _isolates) {
-      isolate?.kill(priority: Isolate.immediate);
-    }
-    _isolates.clear();
-    _sendPorts.clear();
-    _receivePorts.clear();
-    _sendPortCompleters.clear();
-    _initIsolates();
   }
 
   void setLoading(bool value) {
@@ -303,7 +301,8 @@ class LocalPickerProvider with ChangeNotifier {
 
   Future<void> selectFolder() async {
     setLoading(true);
-    await _resetIsolates();
+
+    // 立即清理状态，不等待Isolate操作
     _imagePaths.clear();
     _selectedImagePaths.clear();
     _thumbnailCache.clear();
@@ -311,6 +310,9 @@ class LocalPickerProvider with ChangeNotifier {
     _hasMore = true;
     _totalImageCount = 0;
     notifyListeners();
+
+    // 后台异步重置和初始化Isolate，不阻塞UI
+    unawaited(_resetIsolatesAsync());
 
     try {
       final selectedDirectory = await FilePicker.platform.getDirectoryPath();
@@ -324,6 +326,20 @@ class LocalPickerProvider with ChangeNotifier {
     } finally {
       setLoading(false);
     }
+  }
+
+  /// 异步重置Isolate，不阻塞UI
+  Future<void> _resetIsolatesAsync() async {
+    for (final isolate in _isolates) {
+      isolate?.kill(priority: Isolate.immediate);
+    }
+    _isolates.clear();
+    _sendPorts.clear();
+    _receivePorts.clear();
+    _sendPortCompleters.clear();
+    _isolatesInitialized = false;
+    // 在后台异步初始化，不阻塞UI - 使用unawaited
+    unawaited(ensureIsolatesInitialized());
   }
 
   Future<void> loadMoreImages() async {
@@ -499,6 +515,12 @@ class LocalPickerProvider with ChangeNotifier {
   /// 优化的请求处理：支持批量处理和多Isolate
   void _processNextRequest() {
     if (_requestQueue.isEmpty || _processingCount >= _maxConcurrent) {
+      return;
+    }
+
+    // 确保Isolate已初始化，如果没有则异步初始化
+    if (!_isolatesInitialized) {
+      unawaited(ensureIsolatesInitialized().then((_) => _processNextRequest()));
       return;
     }
 

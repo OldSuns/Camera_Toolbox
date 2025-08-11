@@ -1,8 +1,12 @@
 # OldSun相机工具箱
 
-<img width="1932" height="984" alt="image" src="https://github.com/user-attachments/assets/b2d082c9-d9dc-4536-af1a-5e358939af96" />
-
 **OldSun相机工具箱** 是一款专为摄影爱好者和专业摄影师设计的跨平台桌面应用。它提供了一系列实用工具，旨在简化您的照片管理和处理工作流程。
+
+[![构建状态](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com)
+[![许可证: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![最新版本](https://img.shields.io/github/v/release/OldSuns/snaplock)](https://github.com/OldSuns/Camera_Toolbox/releases)
+
+<img width="1932" height="984" alt="image" src="https://github.com/user-attachments/assets/b2d082c9-d9dc-4536-af1a-5e358939af96" />
 
 ## ✨ 功能特性
 
@@ -40,7 +44,7 @@
   - **文件拖放**: 支持拖放文件到应用中。
   - **文件夹选择**: 支持选择整个文件夹中的文件。
   - **撤销功能**: 支持撤销上一次重命名操作。
-  - **同名合并**: 在自动序号和EXIF命名时避免重复文件名。
+  - **同名合并**: 在自动序号和EXIF命名时遵循重复文件名先后一致性。
 
 ### 5. 相机数据
 - **功能描述**: 内置相机数据库，方便查询和对比不同型号的相机规格。数据来源：[leavestylecode/CameraDatabase](https://github.com/leavestylecode/CameraDatabase)。
@@ -61,76 +65,24 @@
   - **高质量输出**: 支持自定义输出质量，最高可达100%无损质量。
   - **预览功能**: 实时预览水印效果，所见即所得。
 
+### 7. 图像压缩
+- **功能描述**: 提供对JPG格式图片的批量压缩功能。
+- **核心特性**:
+  - **批量压缩**: 支持一次性处理多张图片。
+  - **自定义压缩质量**: 允许用户自由设定压缩质量（1-100）。
+  - **自定义输出尺寸**: 可以指定输出图片的最大宽度或高度。
+  - **指定输出目录**: 用户可以选择压缩后文件的保存位置。
+
 ## 🚀 技术亮点
 
 - **跨平台**: 基于Flutter框架，支持Windows、macOS和Linux。
-- **高性能**: 使用Isolate进行计算密集型和IO密集型操作，如EXIF解析、缩略图生成、文件拷贝和重命名，确保UI流畅。
+- **高性能**: 使用Isolate进行计算密集型和IO密集型操作，如EXIF解析、缩略图生成、文件拷贝、重命名和**图像压缩**，确保UI流畅。同时，采用按需创建和及时销毁的 Isolate 池管理，确保了高效的资源利用和应用的稳定性。
 - **多级缓存**: 采用内存和磁盘两级缓存策略，优化缩略图加载性能，减少不必要的计算和IO操作。
 - **响应式设计**: 自动适应不同屏幕尺寸和平台特性，提供一致的用户体验。
 - **状态管理**: 使用Provider + ChangeNotifier进行状态管理，实现清晰的数据流和高效的UI更新。
 - **错误处理**: 采用分层错误处理策略，提供用户友好的错误提示和详细的日志记录。
 
 ## 🛠️ 架构概览
-
-### 分层架构
-
-```mermaid
-graph TD
-    subgraph "表示层 (UI Layer)"
-        A["Screens & Widgets"]
-    end
-
-    subgraph "业务逻辑层 (Business Logic Layer)"
-        B["Providers (State Management)"]
-        C["Services (Business Logic)"]
-    end
-
-    subgraph "数据访问层 (Data Access Layer)"
-        D["File System"]
-        E["EXIF Parser"]
-        F["Image Processor"]
-        G["Shared Preferences"]
-    end
-
-    A --> B
-    B --> C
-    C --> D
-    C --> E
-    C --> F
-    C --> G
-```
-
-### 状态管理
-
-```mermaid
-graph LR
-    subgraph "全局状态"
-        A["ThemeProvider"]
-        B["NavigationProvider"]
-    end
-
-    subgraph "功能状态"
-        C["LocalPickerProvider"]
-        D["RenameProvider"]
-        E["CameraDatabaseViewModel"]
-        F["PhotoWatermarkProvider"]
-    end
-
-    subgraph "UI"
-        G["HomeScreen"]
-        H["LocalPickerScreen"]
-        I["RenameScreen"]
-        J["CameraDatabaseScreen"]
-        K["PhotoWatermarkScreen"]
-    end
-
-    A --> G
-    B --> G
-    C --> H
-    D --> I
-    E --> J
-    F --> K
-```
 
 ### 并发处理
 
@@ -147,6 +99,7 @@ graph TD
         E["文件拷贝"]
         F["批量重命名"]
         G["水印处理"]
+        H["图像压缩"]
     end
 
     A --> B
@@ -155,6 +108,7 @@ graph TD
     B --> E
     B --> F
     B --> G
+    B --> H
 ```
 
 ### 数据流 (本地选片)
@@ -198,42 +152,6 @@ sequenceDiagram
             end
         end
     end
-```
-
-### 数据流 (照片边框水印)
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant Screen
-    participant Provider
-    participant Isolate
-    participant ImageProcessor
-    participant FileSystem
-
-    User->>Screen: 选择图片
-    Screen->>Provider: loadImage(file)
-    Provider->>FileSystem: 读取文件
-    FileSystem-->>Provider: 文件字节和EXIF数据
-    Provider->>Provider: 创建ImageContainer
-    Provider->>ImageProcessor: 处理图像并添加水印
-    ImageProcessor-->>Provider: 处理后的图像
-    Provider->>Provider: 更新预览图像
-    Provider-->>Screen: 显示预览
-
-    User->>Screen: 调整设置
-    Screen->>Provider: updateConfig(config)
-    Provider->>Provider: 更新配置
-    Provider->>ImageProcessor: 重新处理图像
-    ImageProcessor-->>Provider: 处理后的图像
-    Provider->>Provider: 更新预览图像
-    Provider-->>Screen: 更新预览
-
-    User->>Screen: 保存图片
-    Screen->>Provider: saveCurrentImage()
-    Provider->>FileSystem: 保存处理后的图像
-    FileSystem-->>Provider: 保存完成
-    Provider-->>Screen: 显示保存成功
 ```
 
 ## 📦 安装与使用

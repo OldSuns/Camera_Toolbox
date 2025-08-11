@@ -1,23 +1,30 @@
 # 项目进度记录
+---
 
-## 2025-08-09 Flutter 项目 Android 端兼容性检查
-- **任务名称**：Flutter 项目 Android 端兼容性检查
-- **任务描述**：分析 Flutter/Dart 代码与 Android 原生配置，检查插件、权限、Gradle 配置及资源文件，确保 Android 平台无不兼容问题。
-- **任务完成情况**：
-  - 检查了 `pubspec.yaml` 中所有依赖的 Android 支持情况
-  - 审核了 `AndroidManifest.xml` 权限与配置
-  - 搜索并分析了平台特定 API 调用，确认无 iOS 专属 API 误用
-  - 检查了 Gradle 配置（`minSdkVersion`、`targetSdkVersion`、`compileSdkVersion`、Gradle 版本）
-  - 审核了 `res/` 目录下的资源文件兼容性
-- **发现问题**：
-  - `MANAGE_EXTERNAL_STORAGE` 权限可能导致 Google Play 审核风险
-  - `requestLegacyExternalStorage` 为 Android 10 临时兼容方案，未来可能失效
-- **修复建议**：
-  1. 评估并优化存储权限申请策略，优先使用 `Storage Access Framework`
-  2. 确认 `minSdkVersion` ≥ 21 且与插件最低要求一致
-  3. 持续关注插件版本更新，避免未来兼容性问题
-- **任务完成时间**：2025-08-09 13:12 CST
-- **任务完成者**：代码开发者
-- **任务完成者角色**：💻 代码开发者
-- **任务状态**：成功
-- **任务耗时**：约 3 分钟
+### 任务：修复图像压缩 Isolate 资源泄漏
+
+*   **任务名称**: 修复图像压缩 Isolate 资源泄漏
+*   **任务描述**: 解决图像压缩功能中 Isolate 在使用后未被及时清理导致的资源泄漏问题。
+*   **任务完成时间**: 2025-08-11T08:36:30Z
+*   **任务完成者**: 💻 代码开发者
+*   **任务完成者角色**: `code-developer`
+*   **任务状态**: 成功
+*   **任务耗时**: 约 25 分钟
+
+**详细实现摘要 (来自 activeContext.md):**
+
+*   **核心改进**:
+    *   **按需创建/销毁**: 将 Isolate 池的创建和销毁逻辑从构造/析构函数移至压缩任务的开始和结束，实现了资源的按需分配和及时释放。
+    *   **优雅关闭与强制终止**: 实现了 `shutdown` 信号机制，允许 Isolate 优雅关闭，并设置超时强制终止，确保资源被彻底清理。
+    *   **生命周期管理**: 将 `ImageCompressService` 的实例管理提升到 `State` 级别，避免了因 `Provider` 重建导致的服务实例和 Isolate 泄漏。
+    *   **健壮的错误处理**: 在 Isolate 工作线程中增加了全面的 `try-catch` 和 `cleanup` 逻辑，确保即使在初始化失败或任务执行异常时，`ReceivePort` 等资源也能被正确关闭。
+
+*   **解决的关键问题**:
+    *   修复了 Isolate 工作线程初始化失败时 `ReceivePort` 未关闭的**高危泄漏点**。
+    *   解决了 `Provider` 重建可能导致的 `ImageCompressService` 实例及其关联的整个 Isolate 池泄漏的**中危风险**。
+    *   解决了程序启动时即创建 Isolate 池，导致不必要的资源占用的问题。
+    *   修复了任务结束后，`isolateWorkerEntry` 仍在调用堆栈中残留的问题。
+
+*   **代码质量**:
+    *   通过了 Flutter 静态分析，无任何警告。
+    *   代码结构清晰，资源管理逻辑健壮。
