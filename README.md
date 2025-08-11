@@ -4,7 +4,7 @@
 
 [![构建状态](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com)
 [![许可证: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![最新版本](https://img.shields.io/github/v/release/OldSuns/snaplock)](https://github.com/OldSuns/Camera_Toolbox/releases)
+[![最新版本](https://img.shields.io/github/v/release/OldSuns/Camera_Toolbox)](https://github.com/OldSuns/Camera_Toolbox/releases)
 
 <img width="1932" height="984" alt="image" src="https://github.com/user-attachments/assets/b2d082c9-d9dc-4536-af1a-5e358939af96" />
 
