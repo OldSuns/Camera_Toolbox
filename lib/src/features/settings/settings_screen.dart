@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../config/theme_config.dart';
 import '../../shared/providers/theme_provider.dart';
 import 'theme_settings_dialog.dart';
+import 'cache_management_screen.dart';
 
 /// 设置页面
 class SettingsScreen extends StatelessWidget {
@@ -25,6 +26,20 @@ class SettingsScreen extends StatelessWidget {
               showDialog(
                 context: context,
                 builder: (context) => const ThemeSettingsDialog(),
+              );
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.storage),
+            title: const Text('缓存管理'),
+            subtitle: const Text('管理应用缓存和自动清理策略'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const CacheManagementScreen(),
+                ),
               );
             },
           ),

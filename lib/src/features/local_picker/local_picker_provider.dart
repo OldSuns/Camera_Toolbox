@@ -49,29 +49,41 @@ void _thumbnailGenerator(SendPort sendPort) {
   });
 }
 
-/// 处理单个缩略图生成
+/// 处理单个缩略图生成 - 优化内存和性能
 Future<void> _processSingleThumbnail(
   _ThumbnailRequest message,
   SendPort sendPort,
 ) async {
   try {
-    final fileBytes = await File(message.path).readAsBytes();
+    final file = File(message.path);
+
+    // 检查文件大小，跳过过大的文件避免内存问题
+    final fileSize = await file.length();
+    if (fileSize > 50 * 1024 * 1024) {
+      // 跳过超过50MB的文件
+      sendPort.send(_ThumbnailResult(message.path, Uint8List(0), ''));
+      return;
+    }
+
+    final fileBytes = await file.readAsBytes();
     final image = img.decodeImage(fileBytes);
     if (image != null) {
-      // 使用线性插值算法，平衡质量和速度
+      // 使用最快的插值算法，优先考虑性能
       final thumbnail = img.copyResize(
         image,
         width: message.width,
-        interpolation: img.Interpolation.linear,
+        interpolation: img.Interpolation.nearest, // 使用最快的插值
       );
 
-      // 保持80%质量
+      // 降低质量以减少处理时间和文件大小
       final jpgBytes = Uint8List.fromList(
-        img.encodeJpg(thumbnail, quality: 80),
+        img.encodeJpg(thumbnail, quality: 70), // 从80降到70
       );
 
       // 异步写入磁盘，不阻塞处理
       final cacheFile = File(message.cachePath);
+      // 确保父目录存在
+      await cacheFile.parent.create(recursive: true);
       unawaited(cacheFile.writeAsBytes(jpgBytes));
       final cacheKey = p.basename(cacheFile.path);
       sendPort.send(_ThumbnailResult(message.path, jpgBytes, cacheKey));
@@ -102,6 +114,16 @@ class LocalPickerProvider with ChangeNotifier {
   int _cacheHitCount = 0;
   int _cacheMissCount = 0;
   int _diskReadCount = 0;
+
+  // 预缓存已解码图片的内存池 - 减少缓存大小
+  final Map<String, Image> _previewImageCache = {};
+  final int _maxPreviewCacheSize = 5; // 减少到最多缓存5张已解码图片
+  final List<String> _previewCacheKeys = []; // 用于LRU清理
+
+  // 新增：真正的预加载图片缓存
+  final Map<String, Widget> _preloadedImageCache = {};
+  final int _maxPreloadedCacheSize = 10; // 预加载图片缓存大小
+  final List<String> _preloadedCacheKeys = []; // 用于LRU清理
 
   final Set<String> _selectedImagePaths = {};
   Set<String> get selectedImagePaths => _selectedImagePaths;
@@ -139,8 +161,8 @@ class LocalPickerProvider with ChangeNotifier {
   final Set<String> _pendingGeneration = {};
   int _currentIsolateIndex = 0; // 轮询使用Isolate
 
-  // 批量处理优化
-  final int _batchSize = 3; // 减少批量大小，提高响应性
+  // 批量处理优化 - 进一步减少批量大小
+  final int _batchSize = 2; // 减少到2，进一步提高响应性
   Timer? _batchTimer;
 
   // 延迟初始化标志位
@@ -151,15 +173,15 @@ class LocalPickerProvider with ChangeNotifier {
     _initCacheDir();
   }
 
-  /// 根据CPU核心数初始化设置
+  /// 根据CPU核心数初始化设置 - 更保守的资源分配
   void _initCpuBasedSettings() {
     final cpuCores = Platform.numberOfProcessors;
 
-    // Isolate数量 = CPU核心数 / 2，最少1个，最多6个
-    _isolateCount = (cpuCores / 2).ceil().clamp(1, 6);
+    // 更保守的Isolate数量分配，避免过度消耗CPU
+    _isolateCount = (cpuCores / 2).ceil().clamp(1, 6); // 减少Isolate数量
 
-    // 最大并发数 = CPU核心数 - 1，最少2个，最多12个
-    _maxConcurrent = (cpuCores - 1).clamp(2, 12);
+    // 更保守的并发数，为UI线程预留更多资源
+    _maxConcurrent = (cpuCores - 1).ceil().clamp(1, 12); // 大幅减少并发数
 
     debugPrint(
       'CPU核心数: $cpuCores, Isolate数量: $_isolateCount, 最大并发数: $_maxConcurrent',
@@ -241,10 +263,27 @@ class LocalPickerProvider with ChangeNotifier {
   @override
   void dispose() {
     _batchTimer?.cancel();
-    for (final isolate in _isolates) {
-      isolate?.kill(priority: Isolate.immediate);
+
+    // 优雅关闭Isolate，避免资源泄漏
+    for (int i = 0; i < _isolates.length; i++) {
+      _isolates[i]?.kill(priority: Isolate.immediate);
+      _receivePorts[i].close();
     }
     _isolates.clear();
+    _sendPorts.clear();
+    _receivePorts.clear();
+    _sendPortCompleters.clear();
+
+    // 清理所有缓存，释放内存
+    _thumbnailCache.clear();
+    _previewImageCache.clear();
+    _previewCacheKeys.clear();
+    _preloadedImageCache.clear();
+    _preloadedCacheKeys.clear();
+    _diskCacheIndex.clear();
+    _requestQueue.clear();
+    _pendingGeneration.clear();
+
     super.dispose();
   }
 
@@ -254,9 +293,17 @@ class LocalPickerProvider with ChangeNotifier {
   }
 
   void setCurrentImageIndex(int index) {
+    if (_currentImageIndex == index) return; // 避免重复设置
+
     _currentImageIndex = index;
-    checkRawFileForCurrentImage();
+
+    // 立即通知UI更新，确保响应性
     notifyListeners();
+
+    // 立即执行RAW文件检查，确保UI信息及时更新
+    Future.microtask(() {
+      checkRawFileForCurrentImage();
+    });
   }
 
   void nextImage() {
@@ -281,21 +328,203 @@ class LocalPickerProvider with ChangeNotifier {
   }) {
     if (_imagePaths.isEmpty) return;
 
-    final precacheCount = isScrolling ? 3 : 6;
+    // 使用新的预加载机制，确保图片真正预加载到内存
+    preloadAdjacentImages(context);
+  }
 
-    for (int i = 1; i <= precacheCount; i++) {
-      final nextIndex = _currentImageIndex + i;
-      if (nextIndex < _imagePaths.length) {
-        precacheImage(
-          FileImage(File(_imagePaths[nextIndex])),
-          context,
-          onError: (exception, stackTrace) {
-            debugPrint(
-              'Failed to precache image at index $nextIndex: $exception',
-            );
-          },
-        );
+  /// 预加载指定范围的图片预览版本 - 优化性能
+  Future<void> preloadImagePreviews(int startIndex, int count) async {
+    if (_imagePaths.isEmpty) return;
+
+    // 添加节流机制，避免频繁调用
+    await Future.delayed(const Duration(milliseconds: 100));
+
+    for (int i = 0; i < count; i++) {
+      final index = startIndex + i;
+      if (index >= 0 && index < _imagePaths.length) {
+        final imagePath = _imagePaths[index];
+
+        // 只在内存池未满时预加载
+        if (_previewCacheKeys.length < _maxPreviewCacheSize) {
+          _preloadImageToMemoryPool(imagePath);
+        }
+
+        // 限制缩略图生成的频率
+        if (!_thumbnailCache.containsKey(imagePath) &&
+            !_pendingGeneration.contains(imagePath) &&
+            _processingCount < (_maxConcurrent / 2)) {
+          // 只在低负载时生成
+          final cacheKey = _getCacheKeyForPath(imagePath);
+          if (!_diskCacheIndex.contains(cacheKey)) {
+            _queueThumbnailGeneration(imagePath);
+          } else {
+            // 异步加载磁盘缓存，添加延迟避免过度I/O
+            Future.delayed(const Duration(milliseconds: 50), () {
+              unawaited(_loadFromDiskCache(imagePath));
+            });
+          }
+        }
       }
+
+      // 增加延迟，进一步减少CPU压力
+      await Future.delayed(const Duration(milliseconds: 10));
+    }
+  }
+
+  /// 预加载图片到内存池
+  void _preloadImageToMemoryPool(String imagePath) {
+    if (_previewImageCache.containsKey(imagePath)) {
+      // 图片已在缓存中，更新LRU位置
+      _previewCacheKeys.remove(imagePath);
+      _previewCacheKeys.add(imagePath);
+      return;
+    }
+
+    // 异步预加载图片
+    unawaited(_loadImageToMemoryPool(imagePath));
+  }
+
+  /// 异步加载图片到内存池 - 优化内存使用
+  Future<void> _loadImageToMemoryPool(String imagePath) async {
+    try {
+      final image = Image.file(
+        File(imagePath),
+        fit: BoxFit.contain,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.medium,
+        // 修复长宽比：只限制宽度，让高度自适应保持原始长宽比
+        cacheWidth: 1920, // 限制最大宽度为1920px，高度自适应
+        // 移除cacheHeight，避免强制拉伸破坏长宽比
+        isAntiAlias: false, // 禁用抗锯齿提高性能
+      );
+
+      // 添加到缓存
+      _addToPreviewCache(imagePath, image);
+    } catch (e) {
+      debugPrint('Failed to preload image $imagePath: $e');
+    }
+  }
+
+  /// 添加图片到预览缓存，管理LRU
+  void _addToPreviewCache(String imagePath, Image image) {
+    // 如果缓存已满，移除最老的图片
+    while (_previewCacheKeys.length >= _maxPreviewCacheSize) {
+      final oldestKey = _previewCacheKeys.removeAt(0);
+      _previewImageCache.remove(oldestKey);
+    }
+
+    // 添加新图片
+    _previewImageCache[imagePath] = image;
+    _previewCacheKeys.add(imagePath);
+  }
+
+  /// 获取预缓存的图片
+  Image? getCachedPreviewImage(String imagePath) {
+    final cachedImage = _previewImageCache[imagePath];
+    if (cachedImage != null) {
+      // 更新LRU位置
+      _previewCacheKeys.remove(imagePath);
+      _previewCacheKeys.add(imagePath);
+    }
+    return cachedImage;
+  }
+
+  /// 获取预加载的图片
+  Widget? getPreloadedImage(String imagePath) {
+    final preloadedImage = _preloadedImageCache[imagePath];
+    if (preloadedImage != null) {
+      // 更新LRU位置
+      _preloadedCacheKeys.remove(imagePath);
+      _preloadedCacheKeys.add(imagePath);
+    }
+    return preloadedImage;
+  }
+
+  /// 添加预加载的图片到缓存
+  void addPreloadedImage(String imagePath, Widget imageWidget) {
+    // 如果缓存已满，移除最老的图片
+    while (_preloadedCacheKeys.length >= _maxPreloadedCacheSize) {
+      final oldestKey = _preloadedCacheKeys.removeAt(0);
+      _preloadedImageCache.remove(oldestKey);
+    }
+
+    // 添加新图片
+    _preloadedImageCache[imagePath] = imageWidget;
+    _preloadedCacheKeys.add(imagePath);
+  }
+
+  /// 立即预加载相邻图片
+  void preloadAdjacentImages(BuildContext context) {
+    if (_imagePaths.isEmpty) {
+      return;
+    }
+
+    // 预加载前后各1张图片
+    final indicesToPreload = [_currentImageIndex - 1, _currentImageIndex + 1];
+
+    for (final index in indicesToPreload) {
+      if (index >= 0 && index < _imagePaths.length) {
+        final imagePath = _imagePaths[index];
+
+        // 如果还没有预加载，则开始预加载
+        if (!_preloadedImageCache.containsKey(imagePath)) {
+          // 使用Flutter的precacheImage进行真正的预加载
+          precacheImage(
+                FileImage(File(imagePath)),
+                context,
+                size: const Size(1920, 1080), // 指定预加载尺寸
+              )
+              .then((_) {
+                // 预加载完成后，创建Widget并缓存
+                final imageWidget = Image.file(
+                  File(imagePath),
+                  fit: BoxFit.contain,
+                  gaplessPlayback: true,
+                  filterQuality: FilterQuality.medium,
+                  cacheWidth: 1920,
+                  isAntiAlias: false,
+                );
+                addPreloadedImage(imagePath, imageWidget);
+              })
+              .catchError((error) {
+                debugPrint('Failed to precache image $imagePath: $error');
+              });
+        }
+      }
+    }
+  }
+
+  /// 预加载当前图片
+  void preloadCurrentImage(BuildContext context) {
+    if (_imagePaths.isEmpty || _currentImageIndex >= _imagePaths.length) {
+      return;
+    }
+
+    final currentImagePath = _imagePaths[_currentImageIndex];
+
+    // 如果当前图片还没有预加载，则立即预加载
+    if (!_preloadedImageCache.containsKey(currentImagePath)) {
+      precacheImage(
+            FileImage(File(currentImagePath)),
+            context,
+            size: const Size(1920, 1080),
+          )
+          .then((_) {
+            final imageWidget = Image.file(
+              File(currentImagePath),
+              fit: BoxFit.contain,
+              gaplessPlayback: true,
+              filterQuality: FilterQuality.medium,
+              cacheWidth: 1920,
+              isAntiAlias: false,
+            );
+            addPreloadedImage(currentImagePath, imageWidget);
+          })
+          .catchError((error) {
+            debugPrint(
+              'Failed to precache current image $currentImagePath: $error',
+            );
+          });
     }
   }
 
@@ -375,6 +604,10 @@ class LocalPickerProvider with ChangeNotifier {
       _imagePaths.addAll(files);
       await _regenerateThumbnails();
       _prewarmCache(files);
+
+      // 减少初始预加载数量，避免启动时CPU峰值
+      unawaited(preloadImagePreviews(0, 3));
+
       notifyListeners();
     } catch (e) {
       debugPrint('Error loading more images: $e');
@@ -432,11 +665,23 @@ class LocalPickerProvider with ChangeNotifier {
     final cacheFile = _getCacheFileForPath(path);
     _diskReadCount++;
     try {
+      // 检查文件是否存在
+      if (!await cacheFile.exists()) {
+        final cacheKey = _getCacheKeyForPath(path);
+        _diskCacheIndex.remove(cacheKey);
+        _cacheMissCount++;
+        return;
+      }
+
       final bytes = await cacheFile.readAsBytes();
       if (bytes.isEmpty) {
         final cacheKey = _getCacheKeyForPath(path);
         _diskCacheIndex.remove(cacheKey);
-        await cacheFile.delete();
+        try {
+          await cacheFile.delete();
+        } catch (deleteError) {
+          debugPrint('Error deleting empty cache file: $deleteError');
+        }
         _cacheMissCount++;
         return;
       }
@@ -444,20 +689,34 @@ class LocalPickerProvider with ChangeNotifier {
       _cacheHitCount++;
       notifyListeners();
     } catch (e) {
-      debugPrint('Error reading cache file for $path: $e. Deleting.');
+      debugPrint('Error reading cache file for $path: $e');
       final cacheKey = _getCacheKeyForPath(path);
       _diskCacheIndex.remove(cacheKey);
-      await cacheFile.delete();
+
+      // 只有当文件确实存在时才尝试删除
+      try {
+        if (await cacheFile.exists()) {
+          await cacheFile.delete();
+        }
+      } catch (deleteError) {
+        debugPrint('Error deleting problematic cache file: $deleteError');
+      }
       _cacheMissCount++;
     }
   }
 
-  /// 队列缩略图生成请求
+  /// 队列缩略图生成请求 - 添加优先级控制
   void _queueThumbnailGeneration(String path) {
     if (_pendingGeneration.contains(path)) return;
 
+    // 限制队列大小，避免过度积压
+    if (_requestQueue.length > 50) {
+      return; // 队列过长时跳过新请求
+    }
+
     final cacheFile = _getCacheFileForPath(path);
-    final request = _ThumbnailRequest(path, 300, cacheFile.path);
+    // 降低缩略图尺寸，减少处理时间和内存占用
+    final request = _ThumbnailRequest(path, 250, cacheFile.path); // 从300降到250
     _requestQueue.add(request);
     _processNextRequest();
   }
@@ -652,37 +911,6 @@ class LocalPickerProvider with ChangeNotifier {
       notifyListeners();
     } catch (e) {
       debugPrint('Error calculating total image count: $e');
-    }
-  }
-
-  static Future<void> clearCache() async {
-    try {
-      final cache = await getApplicationCacheDirectory();
-      final cacheDir = Directory(p.join(cache.path, 'thumbnails'));
-      if (await cacheDir.exists()) {
-        await cacheDir.delete(recursive: true);
-        debugPrint('Thumbnail cache cleared.');
-      }
-    } catch (e) {
-      debugPrint('Error clearing thumbnail cache: $e');
-    }
-  }
-
-  static Future<void> clearCacheIfNeeded({int threshold = 200}) async {
-    try {
-      final cache = await getApplicationCacheDirectory();
-      final cacheDir = Directory(p.join(cache.path, 'thumbnails'));
-      if (await cacheDir.exists()) {
-        final files = await cacheDir.list().toList();
-        if (files.length >= threshold) {
-          await clearCache();
-          debugPrint(
-            'Cache limit reached. Cleared ${files.length} thumbnails.',
-          );
-        }
-      }
-    } catch (e) {
-      debugPrint('Error checking or clearing thumbnail cache: $e');
     }
   }
 

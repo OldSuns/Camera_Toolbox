@@ -9,6 +9,7 @@ import 'src/features/home/home_screen.dart';
 import 'src/features/local_picker/local_picker_provider.dart';
 import 'src/features/rename/rename_provider.dart';
 import 'src/features/photo_watermark/photo_watermark_provider.dart';
+import 'src/features/settings/services/cache_management_service.dart';
 
 /// 应用程序的主入口点。
 void main() async {
@@ -39,7 +40,8 @@ void main() async {
   await themeProvider.initialize();
 
   // 在后台启动缓存清理检查，不阻塞UI线程
-  LocalPickerProvider.clearCacheIfNeeded();
+  final cacheService = CacheManagementService();
+  await cacheService.initialize();
 
   // 使用MultiProvider启动应用程序，以便在小部件树中提供各种服务。
   runApp(
@@ -49,6 +51,8 @@ void main() async {
         ChangeNotifierProvider(create: (_) => themeProvider),
         // 提供NavigationProvider以管理导航状态。
         ChangeNotifierProvider(create: (_) => NavigationProvider()),
+        // 提供LocalPickerProvider以管理本地选片功能
+        ChangeNotifierProvider(create: (_) => LocalPickerProvider()),
         // 提供RenameProvider以管理重命名功能
         ChangeNotifierProvider(create: (_) => RenameProvider()),
         // 提供PhotoWatermarkProvider以管理照片水印功能

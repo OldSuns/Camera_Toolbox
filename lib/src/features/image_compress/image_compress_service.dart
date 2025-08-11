@@ -201,12 +201,8 @@ class ImageCompressService extends ChangeNotifier {
     // Isolate 数量 = CPU 核心数 / 2，最少 1 个，最多 6 个
     _isolateCount = (cpuCores / 2).ceil().clamp(1, 6);
 
-    // 最大并发数 = CPU 核心数 - 1，最少 2 个，最多 12 个
-    _maxConcurrent = (cpuCores - 1).clamp(2, 12);
-
-    debugPrint(
-      'CPU核心数: $cpuCores, Isolate数量: $_isolateCount, 最大并发数: $_maxConcurrent',
-    );
+    // 最大并发数 = CPU 核心数 - 1，最少 1 个，最多 12 个
+    _maxConcurrent = (cpuCores - 1).clamp(1, 12);
   }
 
   /// 初始化多个 Isolate

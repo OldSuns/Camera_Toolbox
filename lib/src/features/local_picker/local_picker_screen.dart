@@ -10,10 +10,8 @@ class LocalPickerScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider(
-      create: (_) => LocalPickerProvider(),
-      child: const _LocalPickerView(),
-    );
+    // 使用全局的 LocalPickerProvider 实例，而不是创建新的
+    return const _LocalPickerView();
   }
 }
 
@@ -331,15 +329,14 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
     final provider = Provider.of<LocalPickerProvider>(context, listen: false);
     _pageController = PageController(initialPage: provider.currentImageIndex);
 
-    // Precache initial images
+    // 立即开始预加载，确保第一次切换时图片已准备就绪
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      provider.precacheAdjacentImages(context, isScrolling: false);
-    });
+      if (mounted) {
+        // 立即预加载当前图片的相邻图片
+        provider.preloadAdjacentImages(context);
 
-    _pageController.addListener(() {
-      if (_pageController.page == _pageController.page?.roundToDouble()) {
-        // Scrolling has stopped
-        provider.precacheAdjacentImages(context, isScrolling: false);
+        // 额外预加载当前图片，确保它也在缓存中
+        provider.preloadCurrentImage(context);
       }
     });
   }
@@ -390,20 +387,29 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
             PageView.builder(
               controller: _pageController,
               itemCount: provider.imagePaths.length,
+              allowImplicitScrolling: true, // 启用隐式滚动优化
+              padEnds: false, // 减少内存占用
+              pageSnapping: true, // 确保页面对齐
+              // 使用ClampingScrollPhysics提高性能
+              physics: const ClampingScrollPhysics(),
+              // 立即更新索引，不延迟任何操作
               onPageChanged: (index) {
                 provider.setCurrentImageIndex(index);
-                // Precache images when page changes
-                provider.precacheAdjacentImages(context, isScrolling: true);
+                // 立即触发预加载，确保下一张图片准备就绪
+                provider.preloadAdjacentImages(context);
               },
               itemBuilder: (context, index) {
-                return InteractiveViewer(
-                  panEnabled: true,
-                  boundaryMargin: const EdgeInsets.all(20),
-                  minScale: 0.5,
-                  maxScale: 4,
-                  child: Image.file(
-                    File(provider.imagePaths[index]),
-                    fit: BoxFit.contain,
+                return RepaintBoundary(
+                  // 添加重绘边界，减少不必要的重绘
+                  child: InteractiveViewer(
+                    panEnabled: true,
+                    boundaryMargin: const EdgeInsets.all(20),
+                    minScale: 0.5,
+                    maxScale: 3.0, // 降低最大缩放，减少内存压力
+                    child: _buildOptimizedImageWithPlaceholder(
+                      provider.imagePaths[index],
+                      index,
+                    ),
                   ),
                 );
               },
@@ -495,6 +501,85 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
       ),
     );
   }
+
+  /// 构建带占位符的优化图片组件
+  Widget _buildOptimizedImageWithPlaceholder(String imagePath, int index) {
+    return Consumer<LocalPickerProvider>(
+      builder: (context, provider, child) {
+        // 检查图片是否已预加载到内存
+        final preloadedImage = provider.getPreloadedImage(imagePath);
+
+        if (preloadedImage != null) {
+          // 使用已预加载的图片，确保无缝切换
+          return AnimatedSwitcher(
+            duration: const Duration(milliseconds: 150),
+            child: preloadedImage,
+          );
+        }
+
+        // 使用FutureBuilder来处理图片加载
+        return FutureBuilder<ImageProvider>(
+          future: _loadImageProvider(imagePath),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.done &&
+                snapshot.hasData) {
+              // 图片加载完成，创建并缓存Widget
+              final imageWidget = Image.file(
+                File(imagePath),
+                fit: BoxFit.contain,
+                gaplessPlayback: true,
+                filterQuality: FilterQuality.medium,
+                cacheWidth: 1920,
+                isAntiAlias: false,
+                errorBuilder: (context, error, stackTrace) {
+                  return Container(
+                    color: Colors.grey[300],
+                    child: const Center(
+                      child: Icon(
+                        Icons.error_outline,
+                        size: 64,
+                        color: Colors.grey,
+                      ),
+                    ),
+                  );
+                },
+              );
+
+              // 缓存已加载的图片Widget
+              Future.microtask(() {
+                provider.addPreloadedImage(imagePath, imageWidget);
+              });
+
+              return AnimatedOpacity(
+                opacity: 1.0,
+                duration: const Duration(milliseconds: 200),
+                child: imageWidget,
+              );
+            }
+
+            // 显示加载占位符
+            return Container(
+              color: Colors.grey[900],
+              child: const Center(
+                child: CircularProgressIndicator(
+                  color: Colors.white,
+                  strokeWidth: 2,
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// 异步加载图片提供者
+  Future<ImageProvider> _loadImageProvider(String imagePath) async {
+    final imageProvider = FileImage(File(imagePath));
+    // 预加载图片到内存
+    await precacheImage(imageProvider, context);
+    return imageProvider;
+  }
 }
 
 class ThumbnailView extends StatefulWidget {
@@ -531,7 +616,7 @@ class _ThumbnailViewState extends State<ThumbnailView> {
       return Image.memory(
         cachedThumbnail,
         fit: BoxFit.cover,
-        gaplessPlayback: true,
+        gaplessPlayback: true, // 无缝播放
       );
     }
 
@@ -544,7 +629,7 @@ class _ThumbnailViewState extends State<ThumbnailView> {
           return Image.memory(
             snapshot.data!,
             fit: BoxFit.cover,
-            gaplessPlayback: true,
+            gaplessPlayback: true, // 无缝播放
           );
         }
         // Show a placeholder while loading from disk or generating.
