@@ -151,7 +151,7 @@ jobs:
 
       - name: Build macOS Universal
         run: |
-          flutter build macos --release --universal
+          flutter build macos --release
 
       - name: Archive macOS release
         run: |
