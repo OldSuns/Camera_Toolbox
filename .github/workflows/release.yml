@@ -35,7 +35,8 @@ jobs:
       - name: Configure Gradle to use Aliyun Maven mirror
         run: |
           mkdir -p ~/.gradle
-          echo "allprojects { repositories { maven { url 'https://maven.aliyun.com/repository/public' } maven { url 'https://maven.aliyun.com/repository/google' } mavenCentral() google() } }" > ~/.gradle/init.gradle
+          echo "pluginManagement { repositories { maven { url 'https://maven.aliyun.com/repository/public' } maven { url 'https://maven.aliyun.com/repository/google' } gradlePluginPortal() google() mavenCentral() } }" > ~/.gradle/init.gradle
+          echo "dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS) repositories { maven { url 'https://maven.aliyun.com/repository/public' } maven { url 'https://maven.aliyun.com/repository/google' } google() mavenCentral() } }" >> ~/.gradle/init.gradle
 
       - name: Cache Gradle
         uses: actions/cache@v4
@@ -64,13 +65,37 @@ jobs:
           done
         timeout-minutes: 60
 
+      - name: Archive Android release
+        run: |
+          APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
+          AAB_PATH="build/app/outputs/bundle/release/app-release.aab"
+          if [ ! -f "$APK_PATH" ] || [ ! -f "$AAB_PATH" ]; then
+            echo "⚠️ 未找到默认 Android 构建产物，尝试搜索..."
+            FOUND_APK=$(find build/app/outputs -type f -name "*.apk" | head -n 1)
+            FOUND_AAB=$(find build/app/outputs -type f -name "*.aab" | head -n 1)
+            if [ -n "$FOUND_APK" ]; then
+              echo "✅ 使用找到的 APK: $FOUND_APK"
+              APK_PATH="$FOUND_APK"
+            else
+              echo "❌ 未找到 APK 文件"
+              exit 1
+            fi
+            if [ -n "$FOUND_AAB" ]; then
+              echo "✅ 使用找到的 AAB: $FOUND_AAB"
+              AAB_PATH="$FOUND_AAB"
+            else
+              echo "❌ 未找到 AAB 文件"
+              exit 1
+            fi
+          fi
+          mkdir -p android-release
+          cp "$APK_PATH" android-release/
+          cp "$AAB_PATH" android-release/
       - name: Upload Android Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: android-release
-          path: |
-            build/app/outputs/flutter-apk/app-release.apk
-            build/app/outputs/bundle/release/app-release.aab
+          path: android-release/
 
   build_windows:
     name: Build Windows
