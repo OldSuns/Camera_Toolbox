@@ -142,14 +142,14 @@ class _AboutScreenState extends State<AboutScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                '版本 V1.3.2${_patchNumber == null ? '' : ' Patch $_patchNumber'}',
+                '版本 V1.3.3${_patchNumber == null ? '' : ' Patch $_patchNumber'}',
                 style: const TextStyle(fontSize: 16, color: Colors.grey),
               ),
               const SizedBox(height: 24),
               const Text(
                 '一款基础相机工具应用。\n'
                 '基于Flutter+Dart的跨平台应用\n\n'
-                '更新日志：V1.3.2\n'
+                '更新日志：V1.3.3\n'
                 '在设置界面添加了缓存管理\n优化本地选片功能的性能表现',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 16),
