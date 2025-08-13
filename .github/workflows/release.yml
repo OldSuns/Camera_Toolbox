@@ -69,12 +69,12 @@ jobs:
             fi
           fi
           mkdir -p android-release
-          cp "$APK_PATH" android-release/
+          cp "$APK_PATH" "android-release/Camera_Toolbox_Android_Release.apk"
       - name: Upload Android Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: android-release
-          path: android-release/
+          path: android-release/Camera_Toolbox_Android_Release.apk
 
   build_windows:
     name: Build Windows
@@ -119,12 +119,13 @@ jobs:
               exit 1
             }
           }
-          Compress-Archive -Path "$releaseDir/*" -DestinationPath "windows-release.zip"
+          New-Item -ItemType Directory -Force -Path "windows-release"
+          Compress-Archive -Path "$releaseDir/*" -DestinationPath "windows-release/Camera_Toolbox_Windows_Release.zip"
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-release
-          path: windows-release.zip
+          path: windows-release/Camera_Toolbox_Windows_Release.zip
 
   build_macos:
     name: Build macOS
@@ -179,15 +180,15 @@ jobs:
           
           # 使用ditto创建ZIP包，保持macOS应用包结构
           cd "$RELEASE_DIR"
-          ditto -c -k --sequesterRsrc --keepParent "$(basename "$APP_NAME")" "$GITHUB_WORKSPACE/macos-release/macos-release.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$(basename "$APP_NAME")" "$GITHUB_WORKSPACE/macos-release/Camera_Toolbox_MacOS_Release.zip"
           
-          echo "✅ ZIP包已创建: macos-release/macos-release.zip"
+          echo "✅ ZIP包已创建: macos-release/Camera_Toolbox_MacOS_Release.zip"
 
       - name: Upload macOS Artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-release
-          path: macos-release/macos-release.zip
+          path: macos-release/Camera_Toolbox_MacOS_Release.zip
 
   release:
     name: Create Release
