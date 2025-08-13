@@ -32,11 +32,6 @@ jobs:
           key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.lock') }}
           restore-keys: |
             ${{ runner.os }}-pub-
-      - name: Configure Gradle to use Aliyun Maven mirror
-        run: |
-          mkdir -p ~/.gradle
-          echo "pluginManagement { repositories { maven { url 'https://maven.aliyun.com/repository/public' } maven { url 'https://maven.aliyun.com/repository/google' } gradlePluginPortal() google() mavenCentral() } }" > ~/.gradle/init.gradle
-          echo "dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS) repositories { maven { url 'https://maven.aliyun.com/repository/public' } maven { url 'https://maven.aliyun.com/repository/google' } google() mavenCentral() } }" >> ~/.gradle/init.gradle
 
       - name: Cache Gradle
         uses: actions/cache@v4
