@@ -46,28 +46,20 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Build APK (split per ABI)
+      - name: Build universal APK
         run: |
           for i in 1 2 3; do
-            flutter build apk --release --split-per-abi && break || sleep 10
+            flutter build apk --release && break || sleep 10
           done
         timeout-minutes: 60
 
-      - name: Build AppBundle
-        run: |
-          for i in 1 2 3; do
-            flutter build appbundle --release && break || sleep 10
-          done
-        timeout-minutes: 60
 
       - name: Archive Android release
         run: |
           APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
-          AAB_PATH="build/app/outputs/bundle/release/app-release.aab"
-          if [ ! -f "$APK_PATH" ] || [ ! -f "$AAB_PATH" ]; then
+          if [ ! -f "$APK_PATH" ]; then
             echo "⚠️ 未找到默认 Android 构建产物，尝试搜索..."
             FOUND_APK=$(find build/app/outputs -type f -name "*.apk" | head -n 1)
-            FOUND_AAB=$(find build/app/outputs -type f -name "*.aab" | head -n 1)
             if [ -n "$FOUND_APK" ]; then
               echo "✅ 使用找到的 APK: $FOUND_APK"
               APK_PATH="$FOUND_APK"
@@ -75,17 +67,9 @@ jobs:
               echo "❌ 未找到 APK 文件"
               exit 1
             fi
-            if [ -n "$FOUND_AAB" ]; then
-              echo "✅ 使用找到的 AAB: $FOUND_AAB"
-              AAB_PATH="$FOUND_AAB"
-            else
-              echo "❌ 未找到 AAB 文件"
-              exit 1
-            fi
           fi
           mkdir -p android-release
           cp "$APK_PATH" android-release/
-          cp "$AAB_PATH" android-release/
       - name: Upload Android Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -165,50 +149,51 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Build macOS arm64
+      - name: Build macOS Universal
         run: |
-          flutter build macos --release --dart-define=FLUTTER_TARGET_ARCH=arm64
-          mkdir -p build/macos/Build/Products/Release-arm64
-          mv build/macos/Build/Products/Release/*.app build/macos/Build/Products/Release-arm64/
+          flutter build macos --release
 
-      - name: Build macOS x86_64
+      - name: Archive macOS release
         run: |
-          sudo softwareupdate --install-rosetta --agree-to-license || true
-          flutter build macos --release --dart-define=FLUTTER_TARGET_ARCH=x86_64
-          mkdir -p build/macos/Build/Products/Release-x86_64
-          mv build/macos/Build/Products/Release/*.app build/macos/Build/Products/Release-x86_64/
+          RELEASE_DIR="build/macos/Build/Products/Release"
+          if [ ! -d "$RELEASE_DIR" ]; then
+            echo "❌ macOS Release 目录不存在: $RELEASE_DIR"
+            echo "可用的构建目录:"
+            find build/macos -type d -name "*Release*" 2>/dev/null || echo "未找到任何Release目录"
+            exit 1
+          fi
+          
+          cd "$RELEASE_DIR"
+          APP_NAME=$(find . -maxdepth 1 -name "*.app" -type d | head -n 1)
+          if [ -z "$APP_NAME" ]; then
+            echo "❌ 未找到 .app 文件"
+            echo "目录内容:"
+            ls -la
+            exit 1
+          fi
+          
+          echo "✅ 找到应用: $APP_NAME"
+          # 使用ditto创建ZIP包，保持macOS应用包结构
+          ditto -c -k --sequesterRsrc --keepParent "$APP_NAME" "macos-release.zip"
+          
+          # 创建artifacts目录并移动文件
+          mkdir -p ../../../artifacts/macos-release
+          mv "macos-release.zip" ../../../artifacts/macos-release/
 
-      - name: Archive macOS arm64
-        run: |
-          cd build/macos/Build/Products/Release-arm64
-          APP_NAME=$(find . -maxdepth 1 -name "*.app" -print0 | xargs -0 basename)
-          ditto -c -k --sequesterRsrc --keepParent "$APP_NAME" "../../../../macos-arm64.zip"
-          cd ../../../../../
-
-      - name: Archive macOS x86_64
-        run: |
-          cd build/macos/Build/Products/Release-x86_64
-          APP_NAME=$(find . -maxdepth 1 -name "*.app" -print0 | xargs -0 basename)
-          ditto -c -k --sequesterRsrc --keepParent "$APP_NAME" "../../../../macos-x86_64.zip"
-          cd ../../../../../
-
-      - name: Upload macOS arm64 Artifact
+      - name: Upload macOS Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: macos-arm64
-          path: macos-arm64.zip
-
-      - name: Upload macOS x86_64 Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-x86_64
-          path: macos-x86_64.zip
+          name: macos-release
+          path: artifacts/macos-release/macos-release.zip
 
   release:
     name: Create Release
     needs: [build_android, build_windows, build_macos]
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -217,12 +202,10 @@ jobs:
       - name: Create Release and Upload Artifacts
         uses: softprops/action-gh-release@v2
         with:
-          body_path: ./release_notes.md
+          body_path: release_notes.md
           files: |
             artifacts/android-release/*.apk
-            artifacts/android-release/*.aab
             artifacts/windows-release/*.zip
-            artifacts/macos-arm64/macos-arm64.zip
-            artifacts/macos-x86_64/macos-x86_64.zip
+            artifacts/macos-release/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
