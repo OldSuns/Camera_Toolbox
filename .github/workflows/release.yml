@@ -151,7 +151,7 @@ jobs:
 
       - name: Build macOS Universal
         run: |
-          flutter build macos --release
+          flutter build macos --release --universal
 
       - name: Archive macOS release
         run: |
@@ -163,28 +163,31 @@ jobs:
             exit 1
           fi
           
-          cd "$RELEASE_DIR"
-          APP_NAME=$(find . -maxdepth 1 -name "*.app" -type d | head -n 1)
+          APP_NAME=$(find "$RELEASE_DIR" -maxdepth 1 -name "*.app" -type d | head -n 1)
           if [ -z "$APP_NAME" ]; then
             echo "❌ 未找到 .app 文件"
             echo "目录内容:"
-            ls -la
+            ls -la "$RELEASE_DIR"
             exit 1
           fi
           
-          echo "✅ 找到应用: $APP_NAME"
-          # 使用ditto创建ZIP包，保持macOS应用包结构
-          ditto -c -k --sequesterRsrc --keepParent "$APP_NAME" "macos-release.zip"
+          echo "✅ 找到应用: $(basename "$APP_NAME")"
           
-          # 创建artifacts目录并移动文件
-          mkdir -p ../../../artifacts/macos-release
-          mv "macos-release.zip" ../../../artifacts/macos-release/
+          # 创建输出目录（先清理旧文件）
+          rm -rf "$GITHUB_WORKSPACE/macos-release"
+          mkdir -p "$GITHUB_WORKSPACE/macos-release"
+          
+          # 使用ditto创建ZIP包，保持macOS应用包结构
+          cd "$RELEASE_DIR"
+          ditto -c -k --sequesterRsrc --keepParent "$(basename "$APP_NAME")" "$GITHUB_WORKSPACE/macos-release/macos-release.zip"
+          
+          echo "✅ ZIP包已创建: macos-release/macos-release.zip"
 
       - name: Upload macOS Artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-release
-          path: artifacts/macos-release/macos-release.zip
+          path: macos-release/macos-release.zip
 
   release:
     name: Create Release
