@@ -165,30 +165,44 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Build macOS
-        run: flutter build macos --release
-
-      - name: Archive macOS release
+      - name: Build macOS arm64
         run: |
-          cd build/macos/Build/Products/Release
+          flutter build macos --release --dart-define=FLUTTER_TARGET_ARCH=arm64
+          mkdir -p build/macos/Build/Products/Release-arm64
+          mv build/macos/Build/Products/Release/*.app build/macos/Build/Products/Release-arm64/
+
+      - name: Build macOS x86_64
+        run: |
+          sudo softwareupdate --install-rosetta --agree-to-license || true
+          flutter build macos --release --dart-define=FLUTTER_TARGET_ARCH=x86_64
+          mkdir -p build/macos/Build/Products/Release-x86_64
+          mv build/macos/Build/Products/Release/*.app build/macos/Build/Products/Release-x86_64/
+
+      - name: Archive macOS arm64
+        run: |
+          cd build/macos/Build/Products/Release-arm64
           APP_NAME=$(find . -maxdepth 1 -name "*.app" -print0 | xargs -0 basename)
-          if [ -z "$APP_NAME" ]; then
-            echo "⚠️ 未找到 .app 文件，尝试搜索..."
-            APP_PATH=$(find ../../../.. -type d -name "*.app" | head -n 1)
-            if [ -z "$APP_PATH" ]; then
-              echo "❌ 未找到 macOS 构建产物，构建可能失败"
-              exit 1
-            fi
-            APP_NAME=$(basename "$APP_PATH")
-            cp -R "$APP_PATH" .
-          fi
-          ditto -c -k --sequesterRsrc --keepParent "$APP_NAME" "../../macos-release.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_NAME" "../../../../macos-arm64.zip"
           cd ../../../../../
-      - name: Upload macOS Artifact
+
+      - name: Archive macOS x86_64
+        run: |
+          cd build/macos/Build/Products/Release-x86_64
+          APP_NAME=$(find . -maxdepth 1 -name "*.app" -print0 | xargs -0 basename)
+          ditto -c -k --sequesterRsrc --keepParent "$APP_NAME" "../../../../macos-x86_64.zip"
+          cd ../../../../../
+
+      - name: Upload macOS arm64 Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: macos-release
-          path: macos-release.zip
+          name: macos-arm64
+          path: macos-arm64.zip
+
+      - name: Upload macOS x86_64 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-x86_64
+          path: macos-x86_64.zip
 
   release:
     name: Create Release
@@ -203,11 +217,12 @@ jobs:
       - name: Create Release and Upload Artifacts
         uses: softprops/action-gh-release@v2
         with:
-          body_path: release_notes.md
+          body_path: ./release_notes.md
           files: |
             artifacts/android-release/*.apk
             artifacts/android-release/*.aab
             artifacts/windows-release/*.zip
-            artifacts/macos-release/*.zip
+            artifacts/macos-arm64/macos-arm64.zip
+            artifacts/macos-x86_64/macos-x86_64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
