@@ -11,13 +11,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Set up JDK 11
-        uses: actions/setup-java@v3
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
-          java-version: '11'
+          java-version: '17'
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -26,20 +26,43 @@ jobs:
           cache: true
 
       - name: Cache Pub dependencies
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ~/.pub-cache
           key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.lock') }}
           restore-keys: |
             ${{ runner.os }}-pub-
+      - name: Configure Gradle to use Aliyun Maven mirror
+        run: |
+          mkdir -p ~/.gradle
+          echo "allprojects { repositories { maven { url 'https://maven.aliyun.com/repository/public' } maven { url 'https://maven.aliyun.com/repository/google' } mavenCentral() google() } }" > ~/.gradle/init.gradle
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Build APK
-        run: flutter build apk --release
+      - name: Build APK (split per ABI)
+        run: |
+          for i in 1 2 3; do
+            flutter build apk --release --split-per-abi && break || sleep 10
+          done
+        timeout-minutes: 60
 
       - name: Build AppBundle
-        run: flutter build appbundle --release
+        run: |
+          for i in 1 2 3; do
+            flutter build appbundle --release && break || sleep 10
+          done
+        timeout-minutes: 60
 
       - name: Upload Android Artifacts
         uses: actions/upload-artifact@v4
@@ -54,7 +77,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -63,7 +86,7 @@ jobs:
           cache: true
 
       - name: Cache Pub dependencies
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ~/.pub-cache
           key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.lock') }}
@@ -77,9 +100,22 @@ jobs:
 
       - name: Archive Windows release
         run: |
-          cd build/windows/runner/Release
-          7z a ../../../windows-release.zip .
-          cd ../../../../
+          $releaseDir = "build/windows/x64/runner/Release"
+          if (-Not (Test-Path $releaseDir)) {
+            $releaseDir = "build/windows/runner/Release"
+          }
+          if (-Not (Test-Path $releaseDir)) {
+            Write-Host "⚠️ 未找到默认 Windows Release 目录，尝试搜索..."
+            $searchPath = Get-ChildItem -Path build/windows -Recurse -Directory -Filter Release -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($searchPath) {
+              $releaseDir = $searchPath.FullName
+              Write-Host "✅ 使用找到的 Release 目录: $releaseDir"
+            } else {
+              echo "❌ Windows Release 目录不存在，构建可能失败"
+              exit 1
+            }
+          }
+          Compress-Archive -Path "$releaseDir/*" -DestinationPath "windows-release.zip"
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -91,7 +127,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -100,7 +136,7 @@ jobs:
           cache: true
 
       - name: Cache Pub dependencies
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ~/.pub-cache
           key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.lock') }}
@@ -115,7 +151,17 @@ jobs:
       - name: Archive macOS release
         run: |
           cd build/macos/Build/Products/Release
-          APP_NAME=$(find . -name "*.app" -maxdepth 1 -print0 | xargs -0 basename)
+          APP_NAME=$(find . -maxdepth 1 -name "*.app" -print0 | xargs -0 basename)
+          if [ -z "$APP_NAME" ]; then
+            echo "⚠️ 未找到 .app 文件，尝试搜索..."
+            APP_PATH=$(find ../../../.. -type d -name "*.app" | head -n 1)
+            if [ -z "$APP_PATH" ]; then
+              echo "❌ 未找到 macOS 构建产物，构建可能失败"
+              exit 1
+            fi
+            APP_NAME=$(basename "$APP_PATH")
+            cp -R "$APP_PATH" .
+          fi
           ditto -c -k --sequesterRsrc --keepParent "$APP_NAME" "../../macos-release.zip"
           cd ../../../../../
       - name: Upload macOS Artifact
