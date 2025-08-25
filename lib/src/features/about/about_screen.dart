@@ -1,7 +1,4 @@
-import 'dart:developer';
-
 import 'package:flutter/material.dart';
-import 'package:shorebird_code_push/shorebird_code_push.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 /// 关于页面
@@ -13,112 +10,40 @@ class AboutScreen extends StatefulWidget {
 }
 
 class _AboutScreenState extends State<AboutScreen> {
-  // Create an instance of the updater class
-  final _updater = ShorebirdUpdater();
-  int? _patchNumber;
-  bool _isCheckingForUpdate = false;
+  bool _isOpeningLink = false;
 
-  @override
-  void initState() {
-    super.initState();
-    _fetchCurrentPatch();
-  }
-
-  Future<void> _fetchCurrentPatch() async {
-    try {
-      final currentPatch = await _updater.readCurrentPatch();
-      if (mounted) {
-        setState(() {
-          _patchNumber = currentPatch?.number;
-        });
-      }
-    } catch (error, stackTrace) {
-      log('获取当前补丁失败', error: error, stackTrace: stackTrace);
-      // 打开浏览器跳转到指定网页
-      final uri = Uri.parse('https://github.com/OldSuns/Camera_Toolbox');
-      if (await launchUrl(uri)) {
-        if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('已在浏览器中打开项目主页')));
-        }
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                '无法打开浏览器，请手动访问 https://github.com/OldSuns/Camera_Toolbox',
-              ),
-            ),
-          );
-        }
-      }
-    }
-  }
-
-  Future<void> _checkForUpdates() async {
-    if (_isCheckingForUpdate) return;
+  Future<void> _openProjectPage() async {
+    if (_isOpeningLink) return;
 
     setState(() {
-      _isCheckingForUpdate = true;
+      _isOpeningLink = true;
     });
 
     final scaffoldMessenger = ScaffoldMessenger.of(context);
 
     try {
-      log('正在检查新Patch...');
-      final status = await _updater.checkForUpdate();
-      log('检查更新状态: $status');
-
-      if (!mounted) return;
-
-      if (status == UpdateStatus.outdated) {
-        log('发现新补丁，正在下载...');
-        scaffoldMessenger.showSnackBar(
-          const SnackBar(content: Text('发现新补丁，正在下载...')),
-        );
-        await _updater.update();
-        log('更新下载完成');
-        scaffoldMessenger.showSnackBar(
-          const SnackBar(content: Text('更新完成，请重启应用。')),
-        );
-      } else if (status == UpdateStatus.upToDate) {
-        log('已是最新版本');
-        // 打开浏览器跳转到指定网页
-        final uri = Uri.parse('https://github.com/OldSuns/Camera_Toolbox');
-        if (await launchUrl(uri)) {
-          scaffoldMessenger.showSnackBar(
-            const SnackBar(content: Text('已在浏览器中打开项目主页')),
-          );
-        } else {
-          scaffoldMessenger.showSnackBar(
-            const SnackBar(content: Text('已是最新版本。')),
-          );
-        }
-      } else if (status == UpdateStatus.unavailable) {
-        log('Shorebird更新在当前环境不可用');
-        scaffoldMessenger.showSnackBar(
-          const SnackBar(content: Text('更新功能仅在通过Shorebird构建的应用中可用。')),
-        );
-        // 打开浏览器跳转到指定网页
-        final uri = Uri.parse('https://github.com/OldSuns/Camera_Toolbox');
-        await launchUrl(uri);
-      }
-    } on UpdateException catch (error, stackTrace) {
-      log('更新失败', error: error, stackTrace: stackTrace);
-      scaffoldMessenger.showSnackBar(SnackBar(content: Text('更新失败: $error')));
-    } catch (error, stackTrace) {
-      log('发生未知错误', error: error, stackTrace: stackTrace);
-      scaffoldMessenger.showSnackBar(
-        SnackBar(content: Text('检查更新时发生未知错误: $error')),
-      );
-      // 打开浏览器跳转到指定网页
       final uri = Uri.parse('https://github.com/OldSuns/Camera_Toolbox');
-      await launchUrl(uri);
+      if (await launchUrl(uri)) {
+        scaffoldMessenger.showSnackBar(
+          const SnackBar(content: Text('已在浏览器中打开项目主页')),
+        );
+      } else {
+        scaffoldMessenger.showSnackBar(
+          const SnackBar(
+            content: Text(
+              '无法打开浏览器，请手动访问 https://github.com/OldSuns/Camera_Toolbox',
+            ),
+          ),
+        );
+      }
+    } catch (error) {
+      scaffoldMessenger.showSnackBar(
+        SnackBar(content: Text('打开项目主页时发生错误: $error')),
+      );
     } finally {
       if (mounted) {
         setState(() {
-          _isCheckingForUpdate = false;
+          _isOpeningLink = false;
         });
       }
     }
@@ -141,9 +66,9 @@ class _AboutScreenState extends State<AboutScreen> {
                 style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 8),
-              Text(
-                '版本 V1.3.3${_patchNumber == null ? '' : ' Patch $_patchNumber'}',
-                style: const TextStyle(fontSize: 16, color: Colors.grey),
+              const Text(
+                '版本 V1.3.3',
+                style: TextStyle(fontSize: 16, color: Colors.grey),
               ),
               const SizedBox(height: 24),
               const Text(
@@ -156,14 +81,14 @@ class _AboutScreenState extends State<AboutScreen> {
               ),
               const SizedBox(height: 24),
               ElevatedButton(
-                onPressed: _isCheckingForUpdate ? null : _checkForUpdates,
-                child: _isCheckingForUpdate
+                onPressed: _isOpeningLink ? null : _openProjectPage,
+                child: _isOpeningLink
                     ? const SizedBox(
                         width: 20,
                         height: 20,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : const Text('检查更新'),
+                    : const Text('访问项目主页'),
               ),
             ],
           ),

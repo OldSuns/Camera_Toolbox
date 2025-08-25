@@ -25,7 +25,6 @@ dependencies:
   crypto: ^3.0.3
   desktop_drop: ^0.6.1
   cross_file: ^0.3.4+2
-  shorebird_code_push: ^2.0.4
   url_launcher: ^6.3.2
   flutter_colorpicker: ^1.1.0
   gal: ^2.3.2
@@ -61,7 +60,6 @@ flutter_launcher_icons:
 flutter:
   uses-material-design: true
   assets:
-    - shorebird.yaml
     - lib/data/camera_data/
     - lib/data/logos/
     - lib/data/fonts/
