@@ -20,7 +20,6 @@ enum AppPage {
   batchRename,
   photoWatermark,
   imageCompress,
-  cameraDatabase,
   settings,
   about,
 }
@@ -40,8 +39,6 @@ extension AppPageExtension on AppPage {
         return '照片水印';
       case AppPage.imageCompress:
         return '图像压缩';
-      case AppPage.cameraDatabase:
-        return '相机数据';
       case AppPage.settings:
         return '设置';
       case AppPage.about:
@@ -63,8 +60,6 @@ extension AppPageExtension on AppPage {
         return Icons.photo_filter;
       case AppPage.imageCompress:
         return Icons.compress;
-      case AppPage.cameraDatabase:
-        return Icons.data_usage;
       case AppPage.settings:
         return Icons.settings;
       case AppPage.about:

@@ -12,7 +12,6 @@ import '../about/about_screen.dart';
 import '../rename/rename_screen.dart';
 import '../photo_watermark/photo_watermark_screen.dart';
 import '../image_compress/image_compress_screen.dart';
-import '../camera_database/camera_database_screen.dart';
 
 /// 主页面框架
 class HomeScreen extends StatefulWidget {
@@ -31,7 +30,6 @@ class _HomeScreenState extends State<HomeScreen>
     const RenameScreen(),
     const PhotoWatermarkScreen(),
     const ImageCompressScreen(),
-    const CameraDatabaseScreen(),
     const SettingsScreen(),
     const AboutScreen(),
   ];

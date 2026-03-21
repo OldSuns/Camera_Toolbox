@@ -62,7 +62,6 @@ flutter_launcher_icons:
 flutter:
   uses-material-design: true
   assets:
-    - lib/data/camera_data/
     - lib/data/logos/
     - lib/data/fonts/
   fonts:
