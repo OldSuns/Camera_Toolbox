@@ -1,7 +1,8 @@
 import 'dart:io';
-import 'quick_split_exception.dart';
-import 'package:path/path.dart' as path;
 import 'dart:async';
+import 'package:path/path.dart' as path;
+import '../../shared/utils/conflict_action.dart';
+import 'quick_split_exception.dart';
 
 /// 快速分片服务 - 处理JPG-RAW文件匹配和拷贝
 class QuickSplitService {
@@ -308,9 +309,3 @@ class RawMatch {
   RawMatch({required this.imagePath, required this.rawPath});
 }
 
-/// 文件冲突处理策略
-enum ConflictAction {
-  overwrite, // 覆盖
-  skip, // 跳过
-  rename, // 重命名
-}

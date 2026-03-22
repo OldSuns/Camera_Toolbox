@@ -1,16 +1,22 @@
-import 'dart:io';
+import 'dart:async';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:path/path.dart' as p;
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
+import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
+
+import '../../shared/utils/conflict_action.dart';
 import 'local_picker_provider.dart';
+
+const double _localPickerCompactBreakpoint = 760;
 
 class LocalPickerScreen extends StatelessWidget {
   const LocalPickerScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    // 使用全局的 LocalPickerProvider 实例，而不是创建新的
     return const _LocalPickerView();
   }
 }
@@ -23,20 +29,16 @@ class _LocalPickerView extends StatefulWidget {
 }
 
 class _LocalPickerViewState extends State<_LocalPickerView> {
-  final _scrollController = ScrollController();
+  final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
-    // Use addPostFrameCallback to ensure provider is available.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final provider = Provider.of<LocalPickerProvider>(context, listen: false);
-      _scrollController.addListener(() {
-        if (_scrollController.position.pixels >=
-            _scrollController.position.maxScrollExtent - 200) {
-          provider.loadMoreImages();
-        }
-      });
+    _scrollController.addListener(() {
+      if (_scrollController.position.pixels >=
+          _scrollController.position.maxScrollExtent - 240) {
+        context.read<LocalPickerProvider>().loadMoreImages();
+      }
     });
   }
 
@@ -50,13 +52,13 @@ class _LocalPickerViewState extends State<_LocalPickerView> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Selector<LocalPickerProvider, bool>(
-          selector: (_, provider) => provider.isLoading,
-          builder: (_, isLoading, _) => Text(
-            isLoading && context.read<LocalPickerProvider>().imagePaths.isEmpty
-                ? '正在加载图片...'
-                : '本地选片',
-          ),
+        title: Consumer<LocalPickerProvider>(
+          builder: (context, provider, _) {
+            if (provider.isLoading && provider.totalImageCount == 0) {
+              return const Text('正在加载图片...');
+            }
+            return const Text('本地选片');
+          },
         ),
         actions: [
           IconButton(
@@ -65,51 +67,506 @@ class _LocalPickerViewState extends State<_LocalPickerView> {
           ),
         ],
       ),
-      body: Column(
-        children: [
-          Consumer<LocalPickerProvider>(
-            builder: (context, provider, _) => _buildTopBar(context, provider),
-          ),
-          Selector<LocalPickerProvider, bool>(
-            selector: (_, provider) => provider.isExporting,
-            builder: (context, isExporting, _) {
-              if (!isExporting) return const SizedBox.shrink();
-              return Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Selector<LocalPickerProvider, double>(
-                  selector: (_, provider) => provider.exportProgress,
-                  builder: (context, exportProgress, _) => Column(
+      body: Consumer<LocalPickerProvider>(
+        builder: (context, provider, _) {
+          return Column(
+            children: [
+              _buildTopBar(context, provider),
+              if (provider.isExporting)
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                  child: Column(
                     children: [
-                      LinearProgressIndicator(value: exportProgress),
+                      LinearProgressIndicator(value: provider.exportProgress),
                       const SizedBox(height: 8),
                       Text(
-                        '导出中... ${(exportProgress * 100).toStringAsFixed(0)}%',
+                        '导出中... ${(provider.exportProgress * 100).toStringAsFixed(0)}%',
                       ),
                     ],
+                  ),
+                ),
+              Expanded(child: _buildBody(context, provider)),
+              _buildBottomBar(context, provider),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildBody(BuildContext context, LocalPickerProvider provider) {
+    if (provider.isLoading && provider.totalImageCount == 0) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (provider.currentDirectory == null) {
+      return const Center(child: Text('请选择一个图片目录开始选片'));
+    }
+    if (provider.filteredImageEntries.isEmpty) {
+      return const Center(child: Text('当前范围或筛选条件下没有匹配图片'));
+    }
+    return GridView.builder(
+      controller: _scrollController,
+      padding: const EdgeInsets.all(8),
+      gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: provider.thumbnailSize,
+        mainAxisSpacing: 8,
+        crossAxisSpacing: 8,
+      ),
+      itemCount: provider.visibleImageEntries.length + (provider.hasMore ? 1 : 0),
+      itemBuilder: (context, index) {
+        if (index >= provider.visibleImageEntries.length) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final entry = provider.visibleImageEntries[index];
+        final isSelected = provider.selectedImagePaths.contains(entry.path);
+        return Tooltip(
+          message: entry.fileName,
+          child: GestureDetector(
+            onTap: () {
+              final viewerIndex = provider.filteredImageEntries.indexWhere(
+                (item) => item.path == entry.path,
+              );
+              provider.setCurrentImageIndex(viewerIndex);
+              showDialog(
+                context: context,
+                barrierColor: Colors.black.withAlpha((255 * 0.82).round()),
+                builder: (_) => ChangeNotifierProvider.value(
+                  value: provider,
+                  child: const ImageViewerDialog(),
+                ),
+              );
+            },
+            child: GridTile(
+              header: Align(
+                alignment: Alignment.topRight,
+                child: Checkbox(
+                  value: isSelected,
+                  onChanged: (_) => provider.toggleSelection(entry.path),
+                ),
+              ),
+              footer: LocalPickerGridMetadataFooter(entry: entry),
+              child: ThumbnailView(imagePath: entry.path),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildTopBar(BuildContext context, LocalPickerProvider provider) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isCompact = constraints.maxWidth < _localPickerCompactBreakpoint;
+        return Padding(
+          padding: EdgeInsets.all(isCompact ? 12 : 16),
+          child: isCompact
+              ? _buildCompactTopBar(context, provider)
+              : _buildWideTopBar(context, provider),
+        );
+      },
+    );
+  }
+
+  Widget _buildBottomBar(BuildContext context, LocalPickerProvider provider) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isCompact = constraints.maxWidth < _localPickerCompactBreakpoint;
+        return Padding(
+          padding: EdgeInsets.all(isCompact ? 12 : 16),
+          child: isCompact
+              ? _buildCompactBottomBar(provider)
+              : _buildWideBottomBar(provider),
+        );
+      },
+    );
+  }
+
+  Widget _buildWideTopBar(
+    BuildContext context,
+    LocalPickerProvider provider,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ElevatedButton.icon(
+              onPressed: provider.isLoading ? null : provider.selectFolder,
+              icon: const Icon(Icons.folder_open),
+              label: const Text('选择文件夹'),
+            ),
+            if (provider.currentDirectory != null) ...[
+              const SizedBox(width: 12),
+              Expanded(
+                child: LocalPickerDirectorySummaryCard(
+                  path: provider.currentDirectory!,
+                  compact: false,
+                  onTap: () => _showPathDialog(context, provider.currentDirectory!),
+                ),
+              ),
+            ],
+          ],
+        ),
+        const SizedBox(height: 12),
+        _buildToolbarCard(
+          context,
+          child: Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              _buildScopeField(context, provider, width: 180),
+              _buildSortField(context, provider, width: 180),
+              _buildFilterField(context, provider, width: 160),
+              _buildSelectionActionButtons(provider),
+              _buildCaptureInfoSettingTile(provider),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCompactTopBar(
+    BuildContext context,
+    LocalPickerProvider provider,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            ElevatedButton.icon(
+              onPressed: provider.isLoading ? null : provider.selectFolder,
+              icon: const Icon(Icons.folder_open),
+              label: const Text('选择文件夹'),
+            ),
+            Chip(
+              label: Text(
+                '已选 ${provider.selectedCountInFiltered}/${provider.filteredImageCount}',
+              ),
+            ),
+            FilledButton.tonalIcon(
+              onPressed: () => _showCompactControlsSheet(context, provider),
+              icon: const Icon(Icons.tune),
+              label: const Text('筛选与操作'),
+            ),
+          ],
+        ),
+        if (provider.currentDirectory != null) ...[
+          const SizedBox(height: 8),
+          LocalPickerDirectorySummaryCard(
+            path: provider.currentDirectory!,
+            compact: true,
+            onTap: () => _showPathDialog(context, provider.currentDirectory!),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildWideBottomBar(LocalPickerProvider provider) {
+    return Wrap(
+      spacing: 16,
+      runSpacing: 10,
+      alignment: WrapAlignment.end,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Text(
+          '当前筛选已选 ${provider.selectedCountInFiltered} / ${provider.filteredImageCount}，总选中 ${provider.selectedImagePaths.length} 张',
+        ),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('缩略图:'),
+            SizedBox(
+              width: 150,
+              child: Slider(
+                value: provider.thumbnailSize,
+                min: 80,
+                max: 300,
+                divisions: 11,
+                label: provider.thumbnailSize.round().toString(),
+                onChanged: provider.updateThumbnailSize,
+              ),
+            ),
+          ],
+        ),
+        ElevatedButton(
+          onPressed: provider.isExporting
+              ? null
+              : () => _showExportDialog(context, provider),
+          child: const Text('导出'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCompactBottomBar(LocalPickerProvider provider) {
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            '已选 ${provider.selectedCountInFiltered}/${provider.filteredImageCount}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        const SizedBox(width: 12),
+        ElevatedButton(
+          onPressed: provider.isExporting
+              ? null
+              : () => _showExportDialog(context, provider),
+          child: const Text('导出'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _showCompactControlsSheet(
+    BuildContext context,
+    LocalPickerProvider provider,
+  ) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Consumer<LocalPickerProvider>(
+            builder: (context, sheetProvider, _) {
+              return SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
+                child: _buildToolbarCard(
+                  sheetContext,
+                  child: LocalPickerCompactControlsContent(
+                    provider: sheetProvider,
+                    onClose: () => Navigator.of(sheetContext).pop(),
                   ),
                 ),
               );
             },
           ),
-          Expanded(
-            child: Consumer<LocalPickerProvider>(
-              builder: (context, provider, child) {
-                if (provider.isLoading && provider.imagePaths.isEmpty) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                if (provider.imagePaths.isEmpty) {
-                  return const Center(child: Text('请选择一个包含.jpg图片的文件夹'));
-                }
-                return _buildImageGrid(context, provider);
-              },
+        );
+      },
+    );
+  }
+
+  Future<void> _showPathDialog(BuildContext context, String path) async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('当前目录'),
+          content: SelectableText(path),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('关闭'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildScopeField(
+    BuildContext context,
+    LocalPickerProvider provider, {
+    double? width,
+  }) {
+    final field = DropdownButtonFormField<FolderScanScope>(
+      value: provider.scanScope,
+      decoration: _toolbarInputDecoration(
+        context,
+        label: '扫描范围',
+        icon: Icons.folder_copy_outlined,
+      ),
+      items: FolderScanScope.values
+          .map(
+            (scope) => DropdownMenuItem(
+              value: scope,
+              child: Text(scope.displayName),
+            ),
+          )
+          .toList(),
+      onChanged: (value) {
+        if (value != null) {
+          unawaited(provider.setScanScope(value));
+        }
+      },
+    );
+    return width == null ? field : SizedBox(width: width, child: field);
+  }
+
+  Widget _buildSortField(
+    BuildContext context,
+    LocalPickerProvider provider, {
+    double? width,
+  }) {
+    final field = DropdownButtonFormField<LocalPickerSortMode>(
+      value: provider.sortMode,
+      decoration: _toolbarInputDecoration(
+        context,
+        label: '排序',
+        icon: Icons.swap_vert,
+      ),
+      items: LocalPickerSortMode.values
+          .map(
+            (mode) => DropdownMenuItem(
+              value: mode,
+              child: Text(mode.displayName),
+            ),
+          )
+          .toList(),
+      onChanged: (value) {
+        if (value != null) {
+          provider.setSortMode(value);
+        }
+      },
+    );
+    return width == null ? field : SizedBox(width: width, child: field);
+  }
+
+  Widget _buildFilterField(
+    BuildContext context,
+    LocalPickerProvider provider, {
+    double? width,
+  }) {
+    final field = DropdownButtonFormField<LocalPickerFilterMode>(
+      value: provider.filterMode,
+      decoration: _toolbarInputDecoration(
+        context,
+        label: '筛选',
+        icon: Icons.filter_alt_outlined,
+      ),
+      items: LocalPickerFilterMode.values
+          .map(
+            (mode) => DropdownMenuItem(
+              value: mode,
+              child: Text(mode.displayName),
+            ),
+          )
+          .toList(),
+      onChanged: (value) {
+        if (value != null) {
+          provider.setFilterMode(value);
+        }
+      },
+    );
+    return width == null ? field : SizedBox(width: width, child: field);
+  }
+
+  Widget _buildToolbarCard(BuildContext context, {required Widget child}) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: colorScheme.outlineVariant),
+      ),
+      child: child,
+    );
+  }
+
+  Widget _buildSelectionActionButtons(LocalPickerProvider provider) {
+    return _LocalPickerSelectionActionButtons(provider: provider);
+  }
+
+  Widget _buildCaptureInfoSettingTile(LocalPickerProvider provider) {
+    return _LocalPickerCaptureInfoTile(provider: provider);
+  }
+
+  Future<void> _showExportDialog(
+    BuildContext context,
+    LocalPickerProvider provider,
+  ) async {
+    if (provider.selectedImagePaths.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请先选择图片')));
+      return;
+    }
+
+    final options = await showDialog<LocalPickerExportOptions>(
+      context: context,
+      builder: (_) => const LocalPickerExportDialog(),
+    );
+
+    if (options == null) {
+      return;
+    }
+
+    final result = await provider.exportSelectedToDirectory(options);
+    if (!context.mounted) {
+      return;
+    }
+
+    await showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('导出完成'),
+          content: SizedBox(
+            width: 460,
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '导出图片 ${result.exportedImageCount} 张\n'
+                    '附带 RAW ${result.exportedRawCount} 个\n'
+                    '自动重命名 ${result.renamedCount} 项\n'
+                    '跳过 ${result.skippedCount} 项\n'
+                    '失败 ${result.failedCount} 项',
+                  ),
+                  if (result.issues.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    const Text(
+                      '处理详情',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 180,
+                      child: ListView.builder(
+                        itemCount: result.issues.length,
+                        itemBuilder: (context, index) {
+                          final issue = result.issues[index];
+                          final fileName = p.basename(issue.sourcePath);
+                          final suffix = issue.targetPath == null
+                              ? ''
+                              : '\n目标: ${issue.targetPath}';
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: Text('$fileName: ${issue.message}$suffix'),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ),
           ),
-          Consumer<LocalPickerProvider>(
-            builder: (context, provider, _) =>
-                _buildBottomBar(context, provider),
-          ),
-        ],
-      ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('好的'),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -120,193 +577,154 @@ class _LocalPickerViewState extends State<_LocalPickerView> {
         title: const Text('本地选片帮助'),
         content: const SingleChildScrollView(
           child: Text(
-            '本地选片功能允许您从设备的存储中选择、查看和管理照片。\n\n'
+            '本地选片支持从当前目录或递归子目录扫描图片，并基于完整目录快照分页浏览。\n\n'
             '核心操作：\n'
-            '- 点击“选择文件夹”按钮，选择一个包含照片的文件夹。\n'
-            '- 所有支持的图片会以缩略图的形式显示在网格中。\n'
-            '- 点击缩略图可以进入大图查看模式。\n\n'
-            '大图查看模式：\n'
-            '- 支持左右滑动或使用键盘的左右方向键来切换图片。\n'
-            '- 支持双指或鼠标滚轮缩放，查看图片细节。\n'
-            '- 按下“F”键可以快速选择或取消选择当前图片。\n'
-            '- 顶部栏提供关闭和选择功能。\n\n'
-            '图片管理：\n'
-            '- 在缩略图网格或大图查看器中，您可以选择或取消选择图片。\n'
-            '- 选中的图片会有一个明显的标记。\n'
-            '- 点击主界面的“导出”按钮，可以将所有选中的图片保存到您指定的目录中。\n\n'
-            '支持的格式：\n'
-            '- 支持常见的图片格式，如 JPG, PNG, HEIC 等。',
+            '- 选择文件夹后，可切换扫描范围、排序方式和筛选条件。\n'
+            '- 全选 / 全不选 / 反选作用于当前筛选结果全集，而不是当前屏幕已渲染的页。\n'
+            '- 开启“详情页显示拍摄信息”后，仅在大图查看器显示拍摄日期与拍摄参数，缩略图页不显示。\n'
+            '- 点击缩略图进入大图查看，支持方向键切换、F 键快速勾选。\n\n'
+            '导出：\n'
+            '- 导出前可设置冲突策略：跳过、重命名、覆盖。\n'
+            '- 可选附带同名 RAW 一起导出。\n\n'
+            '支持格式：\n'
+            '- 图片：JPG / JPEG / PNG / HEIC\n'
+            '- RAW 识别：CR2 / CR3 / NEF / ARW / DNG / RAF / RW2 等',
           ),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: const Text('了解'),
           ),
         ],
       ),
     );
   }
+}
 
-  Widget _buildTopBar(BuildContext context, LocalPickerProvider provider) {
-    return Padding(
-      padding: const EdgeInsets.all(16.0),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final buttonGroup = [
-            TextButton(onPressed: provider.selectAll, child: const Text('全选')),
-            TextButton(
-              onPressed: provider.deselectAll,
-              child: const Text('全不选'),
-            ),
-            TextButton(
-              onPressed: provider.invertSelection,
-              child: const Text('反选'),
-            ),
-          ];
+class LocalPickerExportDialog extends StatefulWidget {
+  const LocalPickerExportDialog({
+    super.key,
+    this.initialTargetDirectory,
+    this.initialConflictAction = ConflictAction.rename,
+    this.initialIncludeRaw = false,
+  });
 
-          // Estimate the width of the buttons
-          const double selectFolderWidth = 150;
-          const double buttonGroupWidth = 240; // 80 per button * 3
-          const double spacing = 16;
+  final String? initialTargetDirectory;
+  final ConflictAction initialConflictAction;
+  final bool initialIncludeRaw;
 
-          if (constraints.maxWidth <
-              selectFolderWidth + buttonGroupWidth + spacing) {
-            // Use a column layout if space is tight
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                ElevatedButton.icon(
-                  onPressed: () => provider.selectFolder(),
-                  icon: const Icon(Icons.folder_open),
-                  label: const Text('选择文件夹'),
-                ),
-                if (provider.imagePaths.isNotEmpty)
-                  Wrap(
-                    spacing: 8.0,
-                    alignment: WrapAlignment.center,
-                    children: buttonGroup,
-                  ),
-              ],
-            );
-          } else {
-            // Use a row layout if there's enough space
-            return Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                ElevatedButton.icon(
-                  onPressed: () => provider.selectFolder(),
-                  icon: const Icon(Icons.folder_open),
-                  label: const Text('选择文件夹'),
-                ),
-                if (provider.imagePaths.isNotEmpty) Row(children: buttonGroup),
-              ],
-            );
-          }
-        },
-      ),
-    );
+  @override
+  State<LocalPickerExportDialog> createState() => _LocalPickerExportDialogState();
+}
+
+class _LocalPickerExportDialogState extends State<LocalPickerExportDialog> {
+  late String? _targetDirectory;
+  late ConflictAction _conflictAction;
+  late bool _includeRaw;
+
+  @override
+  void initState() {
+    super.initState();
+    _targetDirectory = widget.initialTargetDirectory;
+    _conflictAction = widget.initialConflictAction;
+    _includeRaw = widget.initialIncludeRaw;
   }
 
-  Widget _buildImageGrid(BuildContext context, LocalPickerProvider provider) {
-    return GridView.builder(
-      controller: _scrollController,
-      padding: const EdgeInsets.all(8.0),
-      gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: provider.thumbnailSize,
-        mainAxisSpacing: 8.0,
-        crossAxisSpacing: 8.0,
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('导出设置'),
+      content: SizedBox(
+        width: 420,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                _targetDirectory == null ? '未选择导出目录' : _targetDirectory!,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: () async {
+                  final selected = await FilePicker.platform.getDirectoryPath();
+                  if (!mounted || selected == null) {
+                    return;
+                  }
+                  setState(() {
+                    _targetDirectory = selected;
+                  });
+                },
+                icon: const Icon(Icons.folder_open),
+                label: const Text('选择导出目录'),
+              ),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<ConflictAction>(
+                value: _conflictAction,
+                decoration: const InputDecoration(
+                  labelText: '冲突处理',
+                  border: OutlineInputBorder(),
+                ),
+                items: ConflictAction.values
+                    .map(
+                      (action) => DropdownMenuItem(
+                        value: action,
+                        child: Text(action.displayName),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) {
+                  if (value != null) {
+                    setState(() {
+                      _conflictAction = value;
+                    });
+                  }
+                },
+              ),
+              const SizedBox(height: 8),
+              Text(
+                _conflictAction.description,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 16),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('附带同名 RAW'),
+                subtitle: const Text('导出 JPG 时一并导出同目录下匹配的 RAW'),
+                value: _includeRaw,
+                onChanged: (value) {
+                  setState(() {
+                    _includeRaw = value;
+                  });
+                },
+              ),
+            ],
+          ),
+        ),
       ),
-      itemCount: provider.imagePaths.length + (provider.hasMore ? 1 : 0),
-      itemBuilder: (context, index) {
-        if (index >= provider.imagePaths.length) {
-          // This is the indicator at the end of the list.
-          // The actual loading is triggered by the scroll controller.
-          return const Center(child: CircularProgressIndicator());
-        }
-        final imagePath = provider.imagePaths[index];
-        final isSelected = provider.selectedImagePaths.contains(imagePath);
-
-        return Tooltip(
-          message: p.basename(imagePath),
-          child: GestureDetector(
-            onTap: () {
-              provider.setCurrentImageIndex(index);
-              showDialog(
-                context: context,
-                barrierColor: Colors.black.withAlpha((255 * 0.8).round()),
-                builder: (BuildContext dialogContext) {
-                  // Use the existing provider instance for the dialog.
-                  return ChangeNotifierProvider.value(
-                    value: provider,
-                    child: const ImageViewerDialog(),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: _targetDirectory == null
+              ? null
+              : () {
+                  Navigator.of(context).pop(
+                    LocalPickerExportOptions(
+                      targetDirectory: _targetDirectory!,
+                      conflictAction: _conflictAction,
+                      includeRaw: _includeRaw,
+                    ),
                   );
                 },
-              );
-            },
-            child: GridTile(
-              header: Align(
-                alignment: Alignment.topRight,
-                child: Checkbox(
-                  value: isSelected,
-                  onChanged: (bool? value) {
-                    provider.toggleSelection(imagePath);
-                  },
-                ),
-              ),
-              child: ThumbnailView(imagePath: imagePath),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildBottomBar(BuildContext context, LocalPickerProvider provider) {
-    return Padding(
-      padding: const EdgeInsets.all(16.0),
-      child: Row(
-        children: [
-          Expanded(
-            child: Wrap(
-              spacing: 16.0,
-              runSpacing: 8.0,
-              alignment: WrapAlignment.end,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                Text(
-                  '选中 ${provider.selectedImagePaths.length} / ${provider.totalImageCount} 张',
-                ),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text('缩略图:'),
-                    SizedBox(
-                      width: 150,
-                      child: Slider(
-                        value: provider.thumbnailSize,
-                        min: 50.0,
-                        max: 300.0,
-                        divisions: 5,
-                        label: provider.thumbnailSize.round().toString(),
-                        onChanged: (double value) {
-                          provider.updateThumbnailSize(value);
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-                ElevatedButton(
-                  onPressed: provider.isExporting
-                      ? null
-                      : () => provider.exportSelected(context),
-                  child: const Text('导出'),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+          child: const Text('开始导出'),
+        ),
+      ],
     );
   }
 }
@@ -325,19 +743,15 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
   @override
   void initState() {
     super.initState();
-    _focusNode.requestFocus();
-    final provider = Provider.of<LocalPickerProvider>(context, listen: false);
+    final provider = context.read<LocalPickerProvider>();
     _pageController = PageController(initialPage: provider.currentImageIndex);
-
-    // 立即开始预加载，确保第一次切换时图片已准备就绪
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        // 立即预加载当前图片的相邻图片
-        provider.preloadAdjacentImages(context);
-
-        // 额外预加载当前图片，确保它也在缓存中
-        provider.preloadCurrentImage(context);
+      if (!mounted) {
+        return;
       }
+      _focusNode.requestFocus();
+      provider.preloadCurrentImage(context);
+      provider.preloadAdjacentImages(context);
     });
   }
 
@@ -349,32 +763,41 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
   }
 
   void _handleKeyEvent(KeyEvent event) {
-    if (event is KeyDownEvent) {
-      final provider = Provider.of<LocalPickerProvider>(context, listen: false);
-      if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
-        _pageController.previousPage(
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeInOut,
-        );
-      } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
-        _pageController.nextPage(
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeInOut,
-        );
-      } else if (event.logicalKey == LogicalKeyboardKey.keyF) {
-        final currentImagePath =
-            provider.imagePaths[provider.currentImageIndex];
-        provider.toggleSelection(currentImagePath);
+    if (event is! KeyDownEvent) {
+      return;
+    }
+    final provider = context.read<LocalPickerProvider>();
+    if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+      _pageController.previousPage(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeInOut,
+      );
+    } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+      _pageController.nextPage(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeInOut,
+      );
+    } else if (event.logicalKey == LogicalKeyboardKey.keyF) {
+      final currentPath = provider.currentImageEntry?.path;
+      if (currentPath != null) {
+        provider.toggleSelection(currentPath);
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final provider = Provider.of<LocalPickerProvider>(context);
-    final imagePath = provider.imagePaths[provider.currentImageIndex];
+    final provider = context.watch<LocalPickerProvider>();
+    final currentEntry = provider.currentImageEntry;
+    if (currentEntry == null) {
+      return const SizedBox.shrink();
+    }
+
+    final imagePath = currentEntry.path;
     final isSelected = provider.selectedImagePaths.contains(imagePath);
-    final hasRaw = provider.rawFileStatus[imagePath] ?? false;
+    final metadata = provider.showCaptureInfo
+        ? provider.metadataForPath(imagePath)
+        : null;
 
     return KeyboardListener(
       focusNode: _focusNode,
@@ -386,30 +809,20 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
           children: [
             PageView.builder(
               controller: _pageController,
-              itemCount: provider.imagePaths.length,
-              allowImplicitScrolling: true, // 启用隐式滚动优化
-              padEnds: false, // 减少内存占用
-              pageSnapping: true, // 确保页面对齐
-              // 使用ClampingScrollPhysics提高性能
-              physics: const ClampingScrollPhysics(),
-              // 立即更新索引，不延迟任何操作
+              itemCount: provider.filteredImageEntries.length,
               onPageChanged: (index) {
                 provider.setCurrentImageIndex(index);
-                // 立即触发预加载，确保下一张图片准备就绪
                 provider.preloadAdjacentImages(context);
               },
               itemBuilder: (context, index) {
+                final entry = provider.filteredImageEntries[index];
                 return RepaintBoundary(
-                  // 添加重绘边界，减少不必要的重绘
                   child: InteractiveViewer(
                     panEnabled: true,
                     boundaryMargin: const EdgeInsets.all(20),
                     minScale: 0.5,
-                    maxScale: 3.0, // 降低最大缩放，减少内存压力
-                    child: _buildOptimizedImageWithPlaceholder(
-                      provider.imagePaths[index],
-                      index,
-                    ),
+                    maxScale: 3,
+                    child: _buildImage(provider, entry.path),
                   ),
                 );
               },
@@ -417,35 +830,10 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
             Positioned(
               top: 10,
               left: 10,
-              child: Material(
-                color: Colors.black.withAlpha((255 * 0.5).round()),
-                borderRadius: BorderRadius.circular(8),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8.0,
-                    vertical: 4.0,
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        p.basename(imagePath),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                        ),
-                      ),
-                      if (hasRaw)
-                        const Text(
-                          '存在 RAW 文件',
-                          style: TextStyle(
-                            color: Colors.greenAccent,
-                            fontSize: 14,
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
+              child: LocalPickerViewerMetadataPanel(
+                entry: currentEntry,
+                showCaptureInfo: provider.showCaptureInfo,
+                metadata: metadata,
               ),
             ),
             Positioned(
@@ -460,9 +848,7 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
                       data: ThemeData(unselectedWidgetColor: Colors.white),
                       child: Checkbox(
                         value: isSelected,
-                        onChanged: (bool? value) {
-                          provider.toggleSelection(imagePath);
-                        },
+                        onChanged: (_) => provider.toggleSelection(imagePath),
                         activeColor: Colors.white,
                         checkColor: Colors.blue,
                       ),
@@ -470,7 +856,6 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
                     IconButton(
                       icon: const Icon(Icons.close, color: Colors.white),
                       onPressed: () => Navigator.of(context).pop(),
-                      tooltip: '关闭',
                     ),
                   ],
                 ),
@@ -481,7 +866,7 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
               child: IconButton(
                 icon: const Icon(Icons.arrow_back_ios, color: Colors.white),
                 onPressed: () => _pageController.previousPage(
-                  duration: const Duration(milliseconds: 300),
+                  duration: const Duration(milliseconds: 220),
                   curve: Curves.easeInOut,
                 ),
               ),
@@ -491,7 +876,7 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
               child: IconButton(
                 icon: const Icon(Icons.arrow_forward_ios, color: Colors.white),
                 onPressed: () => _pageController.nextPage(
-                  duration: const Duration(milliseconds: 300),
+                  duration: const Duration(milliseconds: 220),
                   curve: Curves.easeInOut,
                 ),
               ),
@@ -502,90 +887,497 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
     );
   }
 
-  /// 构建带占位符的优化图片组件
-  Widget _buildOptimizedImageWithPlaceholder(String imagePath, int index) {
-    return Consumer<LocalPickerProvider>(
-      builder: (context, provider, child) {
-        // 检查图片是否已预加载到内存
-        final preloadedImage = provider.getPreloadedImage(imagePath);
-
-        if (preloadedImage != null) {
-          // 使用已预加载的图片，确保无缝切换
-          return AnimatedSwitcher(
-            duration: const Duration(milliseconds: 150),
-            child: preloadedImage,
-          );
+  Widget _buildImage(LocalPickerProvider provider, String imagePath) {
+    final imageProvider = provider.getImageProvider(imagePath);
+    return Image(
+      image: imageProvider,
+      fit: BoxFit.contain,
+      gaplessPlayback: true,
+      filterQuality: FilterQuality.medium,
+      frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+        if (wasSynchronouslyLoaded || frame != null) {
+          return child;
         }
-
-        // 使用FutureBuilder来处理图片加载
-        return FutureBuilder<ImageProvider>(
-          future: _loadImageProvider(imagePath),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.done &&
-                snapshot.hasData) {
-              // 图片加载完成，创建并缓存Widget
-              final imageWidget = Image.file(
-                File(imagePath),
-                fit: BoxFit.contain,
-                gaplessPlayback: true,
-                filterQuality: FilterQuality.medium,
-                cacheWidth: 1920,
-                isAntiAlias: false,
-                errorBuilder: (context, error, stackTrace) {
-                  return Container(
-                    color: Colors.grey[300],
-                    child: const Center(
-                      child: Icon(
-                        Icons.error_outline,
-                        size: 64,
-                        color: Colors.grey,
-                      ),
-                    ),
-                  );
-                },
-              );
-
-              // 缓存已加载的图片Widget
-              Future.microtask(() {
-                provider.addPreloadedImage(imagePath, imageWidget);
-              });
-
-              return AnimatedOpacity(
-                opacity: 1.0,
-                duration: const Duration(milliseconds: 200),
-                child: imageWidget,
-              );
-            }
-
-            // 显示加载占位符
-            return Container(
-              color: Colors.grey[900],
-              child: const Center(
-                child: CircularProgressIndicator(
-                  color: Colors.white,
-                  strokeWidth: 2,
-                ),
-              ),
-            );
-          },
+        return Container(
+          color: Colors.grey[900],
+          child: const Center(
+            child: CircularProgressIndicator(color: Colors.white),
+          ),
+        );
+      },
+      errorBuilder: (context, error, stackTrace) {
+        return Container(
+          color: Colors.grey[300],
+          child: const Center(
+            child: Icon(Icons.error_outline, size: 64, color: Colors.grey),
+          ),
         );
       },
     );
   }
+}
 
-  /// 异步加载图片提供者
-  Future<ImageProvider> _loadImageProvider(String imagePath) async {
-    final imageProvider = FileImage(File(imagePath));
-    // 预加载图片到内存
-    await precacheImage(imageProvider, context);
-    return imageProvider;
+String _formatLocalPickerCaptureTime(DateTime value, {bool withSeconds = false}) {
+  return DateFormat(
+    withSeconds ? 'yyyy-MM-dd HH:mm:ss' : 'yyyy-MM-dd HH:mm',
+  ).format(value.toLocal());
+}
+
+class LocalPickerGridMetadataFooter extends StatelessWidget {
+  const LocalPickerGridMetadataFooter({
+    super.key,
+    required this.entry,
+  });
+
+  final LocalImageEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!entry.hasRaw) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.bottomCenter,
+          end: Alignment.topCenter,
+          colors: [
+            Colors.black.withAlpha((255 * 0.72).round()),
+            Colors.black.withAlpha((255 * 0.10).round()),
+          ],
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.black.withAlpha((255 * 0.6).round()),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Text(
+              'RAW',
+              style: TextStyle(color: Colors.white, fontSize: 11),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class LocalPickerDirectorySummaryCard extends StatelessWidget {
+  const LocalPickerDirectorySummaryCard({
+    super.key,
+    required this.path,
+    required this.onTap,
+    required this.compact,
+  });
+
+  final String path;
+  final VoidCallback onTap;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Ink(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.folder_outlined, size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: compact
+                  ? Text(
+                      path,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    )
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '当前目录',
+                          style: Theme.of(context).textTheme.labelMedium
+                              ?.copyWith(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          path,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+            ),
+            if (!compact) ...[
+              const SizedBox(width: 8),
+              Text(
+                '查看完整路径',
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+            const SizedBox(width: 8),
+            Icon(
+              Icons.open_in_full,
+              size: 16,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+InputDecoration _toolbarInputDecoration(
+  BuildContext context, {
+  required String label,
+  required IconData icon,
+}) {
+  final colorScheme = Theme.of(context).colorScheme;
+  return InputDecoration(
+    labelText: label,
+    isDense: true,
+    filled: true,
+    fillColor: colorScheme.surface,
+    prefixIcon: Icon(icon, size: 18),
+    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+    border: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(14),
+      borderSide: BorderSide(color: colorScheme.outlineVariant),
+    ),
+    enabledBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(14),
+      borderSide: BorderSide(color: colorScheme.outlineVariant),
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(14),
+      borderSide: BorderSide(color: colorScheme.primary, width: 1.2),
+    ),
+  );
+}
+
+class _LocalPickerSelectionActionButtons extends StatelessWidget {
+  const _LocalPickerSelectionActionButtons({required this.provider});
+
+  final LocalPickerProvider provider;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = OutlinedButton.styleFrom(
+      minimumSize: const Size(0, 42),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    );
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        OutlinedButton.icon(
+          style: style,
+          onPressed: provider.selectAll,
+          icon: const Icon(Icons.done_all, size: 18),
+          label: const Text('全选'),
+        ),
+        OutlinedButton.icon(
+          style: style,
+          onPressed: provider.deselectAll,
+          icon: const Icon(Icons.remove_done, size: 18),
+          label: const Text('全不选'),
+        ),
+        OutlinedButton.icon(
+          style: style,
+          onPressed: provider.invertSelection,
+          icon: const Icon(Icons.flip, size: 18),
+          label: const Text('反选'),
+        ),
+      ],
+    );
+  }
+}
+
+class _LocalPickerToolbarDropdown<T> extends StatelessWidget {
+  const _LocalPickerToolbarDropdown({
+    required this.value,
+    required this.decoration,
+    required this.items,
+    required this.onChanged,
+  });
+
+  final T value;
+  final InputDecoration decoration;
+  final List<DropdownMenuItem<T>> items;
+  final ValueChanged<T?> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return DropdownButtonFormField<T>(
+      value: value,
+      decoration: decoration,
+      items: items,
+      onChanged: onChanged,
+    );
+  }
+}
+
+class _LocalPickerCaptureInfoTile extends StatelessWidget {
+  const _LocalPickerCaptureInfoTile({required this.provider});
+
+  final LocalPickerProvider provider;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: colorScheme.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: colorScheme.outlineVariant),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.info_outline,
+            size: 18,
+            color: colorScheme.onSurfaceVariant,
+          ),
+          const SizedBox(width: 10),
+          const Text('详情页显示拍摄信息'),
+          const SizedBox(width: 8),
+          Switch(
+            value: provider.showCaptureInfo,
+            onChanged: provider.setShowCaptureInfo,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class LocalPickerCompactControlsContent extends StatelessWidget {
+  const LocalPickerCompactControlsContent({
+    super.key,
+    required this.provider,
+    required this.onClose,
+  });
+
+  final LocalPickerProvider provider;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Text(
+              '筛选与操作',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const Spacer(),
+            IconButton(
+              onPressed: onClose,
+              icon: const Icon(Icons.close),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          '调整浏览方式、筛选条件和批量选择操作。',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 12),
+        _LocalPickerToolbarDropdown<FolderScanScope>(
+          value: provider.scanScope,
+          decoration: _toolbarInputDecoration(
+            context,
+            label: '扫描范围',
+            icon: Icons.folder_copy_outlined,
+          ),
+          items: FolderScanScope.values
+              .map(
+                (scope) => DropdownMenuItem(
+                  value: scope,
+                  child: Text(scope.displayName),
+                ),
+              )
+              .toList(),
+          onChanged: (value) {
+            if (value != null) {
+              unawaited(provider.setScanScope(value));
+            }
+          },
+        ),
+        const SizedBox(height: 12),
+        _LocalPickerToolbarDropdown<LocalPickerSortMode>(
+          value: provider.sortMode,
+          decoration: _toolbarInputDecoration(
+            context,
+            label: '排序',
+            icon: Icons.swap_vert,
+          ),
+          items: LocalPickerSortMode.values
+              .map(
+                (mode) => DropdownMenuItem(
+                  value: mode,
+                  child: Text(mode.displayName),
+                ),
+              )
+              .toList(),
+          onChanged: (value) {
+            if (value != null) {
+              provider.setSortMode(value);
+            }
+          },
+        ),
+        const SizedBox(height: 12),
+        _LocalPickerToolbarDropdown<LocalPickerFilterMode>(
+          value: provider.filterMode,
+          decoration: _toolbarInputDecoration(
+            context,
+            label: '筛选',
+            icon: Icons.filter_alt_outlined,
+          ),
+          items: LocalPickerFilterMode.values
+              .map(
+                (mode) => DropdownMenuItem(
+                  value: mode,
+                  child: Text(mode.displayName),
+                ),
+              )
+              .toList(),
+          onChanged: (value) {
+            if (value != null) {
+              provider.setFilterMode(value);
+            }
+          },
+        ),
+        const SizedBox(height: 12),
+        _LocalPickerCaptureInfoTile(provider: provider),
+        const SizedBox(height: 16),
+        Text(
+          '缩略图大小',
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+        Row(
+          children: [
+            Expanded(
+              child: Slider(
+                value: provider.thumbnailSize,
+                min: 80,
+                max: 300,
+                divisions: 11,
+                label: provider.thumbnailSize.round().toString(),
+                onChanged: provider.updateThumbnailSize,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(provider.thumbnailSize.round().toString()),
+          ],
+        ),
+        const SizedBox(height: 8),
+        _LocalPickerSelectionActionButtons(provider: provider),
+      ],
+    );
+  }
+}
+
+class LocalPickerViewerMetadataPanel extends StatelessWidget {
+  const LocalPickerViewerMetadataPanel({
+    super.key,
+    required this.entry,
+    required this.showCaptureInfo,
+    required this.metadata,
+  });
+
+  final LocalImageEntry entry;
+  final bool showCaptureInfo;
+  final LocalImageMetadata? metadata;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.black.withAlpha((255 * 0.5).round()),
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              entry.fileName,
+              style: const TextStyle(color: Colors.white, fontSize: 16),
+            ),
+            if (showCaptureInfo && metadata != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                _formatLocalPickerCaptureTime(
+                  metadata!.captureTime,
+                  withSeconds: true,
+                ),
+                style: const TextStyle(color: Colors.white, fontSize: 14),
+              ),
+              Text(
+                metadata!.captureTimeLabel,
+                style: TextStyle(
+                  color: metadata!.captureTimeSource == CaptureTimeSource.exif
+                      ? Colors.lightGreenAccent
+                      : Colors.orangeAccent,
+                  fontSize: 12,
+                ),
+              ),
+              if (metadata!.cameraModel != null)
+                Text(
+                  metadata!.cameraModel!,
+                  style: const TextStyle(color: Colors.white70, fontSize: 13),
+                ),
+              if (metadata!.exposureSummary != null)
+                Text(
+                  metadata!.exposureSummary!,
+                  style: const TextStyle(color: Colors.white70, fontSize: 13),
+                ),
+            ],
+            if (entry.hasRaw)
+              const Text(
+                '存在 RAW 文件',
+                style: TextStyle(color: Colors.greenAccent, fontSize: 14),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
 class ThumbnailView extends StatefulWidget {
-  final String imagePath;
-
   const ThumbnailView({super.key, required this.imagePath});
+
+  final String imagePath;
 
   @override
   State<ThumbnailView> createState() => _ThumbnailViewState();
@@ -597,17 +1389,25 @@ class _ThumbnailViewState extends State<ThumbnailView> {
   @override
   void initState() {
     super.initState();
-    // 直接加载缩略图，不设置优先级
-    _thumbnailFuture = Provider.of<LocalPickerProvider>(
-      context,
-      listen: false,
-    ).getThumbnail(widget.imagePath);
+    _loadThumbnail();
+  }
+
+  @override
+  void didUpdateWidget(covariant ThumbnailView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.imagePath != widget.imagePath) {
+      _loadThumbnail();
+    }
+  }
+
+  void _loadThumbnail() {
+    _thumbnailFuture = context.read<LocalPickerProvider>().getThumbnail(
+      widget.imagePath,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    // Listen to provider changes to get updates when a new thumbnail is generated
-    // and added to the memory cache.
     final cachedThumbnail = context
         .watch<LocalPickerProvider>()
         .thumbnailCache[widget.imagePath];
@@ -616,7 +1416,7 @@ class _ThumbnailViewState extends State<ThumbnailView> {
       return Image.memory(
         cachedThumbnail,
         fit: BoxFit.cover,
-        gaplessPlayback: true, // 无缝播放
+        gaplessPlayback: true,
       );
     }
 
@@ -625,14 +1425,14 @@ class _ThumbnailViewState extends State<ThumbnailView> {
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.done &&
             snapshot.hasData &&
-            snapshot.data != null) {
+            snapshot.data != null &&
+            snapshot.data!.isNotEmpty) {
           return Image.memory(
             snapshot.data!,
             fit: BoxFit.cover,
-            gaplessPlayback: true, // 无缝播放
+            gaplessPlayback: true,
           );
         }
-        // Show a placeholder while loading from disk or generating.
         return Container(
           color: Colors.grey[300],
           child: const Center(

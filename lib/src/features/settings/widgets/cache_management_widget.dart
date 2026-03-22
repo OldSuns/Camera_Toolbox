@@ -52,11 +52,18 @@ class _CacheManagementWidgetState extends State<CacheManagementWidget> {
     final confirmed = await _showConfirmDialog('清理缓存', '确定要清理所有缓存吗？此操作无法撤销。');
 
     if (!confirmed) return;
+    if (!mounted) return;
 
+    final localPickerProvider = context.read<LocalPickerProvider>();
     setState(() => _isClearing = true);
     try {
       final success = await _cacheService.clearCache();
       if (success) {
+        try {
+          await localPickerProvider.clearMemoryCache();
+        } catch (e) {
+          debugPrint('Failed to clear LocalPickerProvider memory cache: $e');
+        }
         _showSuccessSnackBar('缓存清理完成');
         await _refreshStats();
       } else {

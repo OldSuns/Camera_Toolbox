@@ -1,10 +1,11 @@
 import 'dart:io';
 import 'dart:isolate';
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
+import '../../shared/services/file_selector_service.dart';
+import '../../shared/utils/conflict_action.dart';
 import 'quick_split_exception.dart';
 import 'quick_split_service.dart';
-import '../../shared/services/file_selector_service.dart';
-import 'package:permission_handler/permission_handler.dart';
 
 /// 快速分片页面 - 根据JPG文件匹配并拷贝同名RAW文件
 class QuickSplitScreen extends StatefulWidget {

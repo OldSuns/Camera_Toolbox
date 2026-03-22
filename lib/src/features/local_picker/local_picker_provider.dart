@@ -1,38 +1,94 @@
+export 'local_picker_models.dart';
+
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
-import 'dart:convert';
 import 'dart:typed_data';
+
 import 'package:crypto/crypto.dart';
-import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-/// Data class for thumbnail generation request
+import '../../shared/utils/conflict_action.dart';
+import '../exif_reader/exif_service.dart';
+import 'local_picker_models.dart';
+
+const Set<String> _supportedImageExtensions = {
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.heic',
+};
+
+const Set<String> _supportedRawExtensions = {
+  '.raw',
+  '.crw',
+  '.cr2',
+  '.cr3',
+  '.nef',
+  '.nrw',
+  '.arw',
+  '.srf',
+  '.sr2',
+  '.dng',
+  '.raf',
+  '.orf',
+  '.rw2',
+  '.pef',
+  '.ptx',
+  '.srw',
+  '.gpr',
+  '.3fr',
+  '.fff',
+  '.dcr',
+  '.kdc',
+  '.mrw',
+  '.mos',
+  '.x3f',
+};
+
 class _ThumbnailRequest {
   final String path;
   final int width;
   final String cachePath;
-  _ThumbnailRequest(this.path, this.width, this.cachePath);
+
+  const _ThumbnailRequest(this.path, this.width, this.cachePath);
 }
 
-/// Data class for thumbnail generation result
 class _ThumbnailResult {
   final String path;
   final Uint8List bytes;
   final String cacheKey;
-  _ThumbnailResult(this.path, this.bytes, this.cacheKey);
+
+  const _ThumbnailResult(this.path, this.bytes, this.cacheKey);
 }
 
-/// 批量缩略图生成请求
 class _BatchThumbnailRequest {
   final List<_ThumbnailRequest> requests;
-  _BatchThumbnailRequest(this.requests);
+
+  const _BatchThumbnailRequest(this.requests);
 }
 
-/// The entry point for the isolate.
+class _ResolvedExportName {
+  final String? imageFileName;
+  final String? rawFileName;
+  final bool wasRenamed;
+  final bool imageSkipped;
+  final bool rawSkipped;
+
+  const _ResolvedExportName({
+    required this.imageFileName,
+    required this.rawFileName,
+    required this.wasRenamed,
+    this.imageSkipped = false,
+    this.rawSkipped = false,
+  });
+}
+
 void _thumbnailGenerator(SendPort sendPort) {
   final receivePort = ReceivePort();
   sendPort.send(receivePort.sendPort);
@@ -41,7 +97,6 @@ void _thumbnailGenerator(SendPort sendPort) {
     if (message is _ThumbnailRequest) {
       await _processSingleThumbnail(message, sendPort);
     } else if (message is _BatchThumbnailRequest) {
-      // 批量处理缩略图，减少Isolate通信开销
       for (final request in message.requests) {
         await _processSingleThumbnail(request, sendPort);
       }
@@ -49,63 +104,147 @@ void _thumbnailGenerator(SendPort sendPort) {
   });
 }
 
-/// 处理单个缩略图生成 - 优化内存和性能
 Future<void> _processSingleThumbnail(
   _ThumbnailRequest message,
   SendPort sendPort,
 ) async {
   try {
     final file = File(message.path);
-
-    // 检查文件大小，跳过过大的文件避免内存问题
     final fileSize = await file.length();
     if (fileSize > 50 * 1024 * 1024) {
-      // 跳过超过50MB的文件
-      sendPort.send(_ThumbnailResult(message.path, Uint8List(0), ''));
+      sendPort.send(_ThumbnailResult('', Uint8List(0), ''));
       return;
     }
 
     final fileBytes = await file.readAsBytes();
     final image = img.decodeImage(fileBytes);
-    if (image != null) {
-      // 使用最快的插值算法，优先考虑性能
-      final thumbnail = img.copyResize(
-        image,
-        width: message.width,
-        interpolation: img.Interpolation.nearest, // 使用最快的插值
-      );
-
-      // 降低质量以减少处理时间和文件大小
-      final jpgBytes = Uint8List.fromList(
-        img.encodeJpg(thumbnail, quality: 70), // 从80降到70
-      );
-
-      // 异步写入磁盘，不阻塞处理
-      final cacheFile = File(message.cachePath);
-      // 确保父目录存在
-      await cacheFile.parent.create(recursive: true);
-      unawaited(cacheFile.writeAsBytes(jpgBytes));
-      final cacheKey = p.basename(cacheFile.path);
-      sendPort.send(_ThumbnailResult(message.path, jpgBytes, cacheKey));
+    if (image == null) {
+      sendPort.send(_ThumbnailResult(message.path, Uint8List(0), ''));
+      return;
     }
-  } catch (e) {
-    debugPrint('Error in isolate for ${message.path}: $e');
+
+    final thumbnail = img.copyResize(
+      image,
+      width: message.width,
+      interpolation: img.Interpolation.nearest,
+    );
+    final jpgBytes = Uint8List.fromList(img.encodeJpg(thumbnail, quality: 70));
+
+    final cacheFile = File(message.cachePath);
+    await cacheFile.parent.create(recursive: true);
+    unawaited(cacheFile.writeAsBytes(jpgBytes));
+    sendPort.send(
+      _ThumbnailResult(message.path, jpgBytes, p.basename(cacheFile.path)),
+    );
+  } catch (error) {
+    debugPrint('Error in thumbnail isolate for ${message.path}: $error');
     sendPort.send(_ThumbnailResult(message.path, Uint8List(0), ''));
   }
 }
 
-/// 不等待异步操作完成的辅助函数
-void unawaited(Future<void> future) {
-  // 故意不等待，让操作在后台进行
-}
-
 class LocalPickerProvider with ChangeNotifier {
-  final List<String> _imagePaths = [];
-  List<String> get imagePaths => _imagePaths;
+  LocalPickerProvider({int pageSize = 100}) : _pageSize = pageSize {
+    _initCpuBasedSettings();
+    unawaited(_initCacheDir());
+  }
+
+  final int _pageSize;
+
+  final List<LocalImageEntry> _allImageEntries = [];
+  List<LocalImageEntry> get allImageEntries =>
+      List.unmodifiable(_allImageEntries);
+
+  final List<LocalImageEntry> _filteredImageEntries = [];
+  List<LocalImageEntry> get filteredImageEntries =>
+      List.unmodifiable(_filteredImageEntries);
+
+  int _visibleCount = 0;
+  List<LocalImageEntry> get visibleImageEntries =>
+      _filteredImageEntries.take(_visibleCount).toList(growable: false);
+
+  List<String> get imagePaths =>
+      visibleImageEntries.map((entry) => entry.path).toList(growable: false);
+
   String? _currentDirectory;
-  bool _hasMore = true;
-  bool get hasMore => _hasMore;
-  final int _pageSize = 100;
+  String? get currentDirectory => _currentDirectory;
+
+  FolderScanScope _scanScope = FolderScanScope.currentOnly;
+  FolderScanScope get scanScope => _scanScope;
+
+  LocalPickerSortMode _sortMode = LocalPickerSortMode.modifiedNewest;
+  LocalPickerSortMode get sortMode => _sortMode;
+
+  LocalPickerFilterMode _filterMode = LocalPickerFilterMode.all;
+  LocalPickerFilterMode get filterMode => _filterMode;
+
+  final Set<String> _selectedImagePaths = {};
+  Set<String> get selectedImagePaths => Set.unmodifiable(_selectedImagePaths);
+
+  final Map<String, LocalImageEntry> _entriesByPath = {};
+
+  bool _showCaptureInfo = false;
+  bool get showCaptureInfo => _showCaptureInfo;
+
+  final Map<String, LocalImageMetadata> _metadataCache = {};
+  Map<String, LocalImageMetadata> get metadataCache =>
+      Map.unmodifiable(_metadataCache);
+  final Set<String> _pendingMetadataPaths = {};
+  Set<String> get pendingMetadataPaths => Set.unmodifiable(_pendingMetadataPaths);
+
+  int get totalImageCount => _allImageEntries.length;
+  int get filteredImageCount => _filteredImageEntries.length;
+  int get selectedCountInFiltered => _filteredImageEntries
+      .where((entry) => _selectedImagePaths.contains(entry.path))
+      .length;
+  bool get hasMore => _visibleCount < _filteredImageEntries.length;
+
+  double _thumbnailSize = 150.0;
+  double get thumbnailSize => _thumbnailSize;
+
+  bool _isLoading = false;
+  bool get isLoading => _isLoading;
+
+  bool _isExporting = false;
+  bool get isExporting => _isExporting;
+
+  double _exportProgress = 0.0;
+  double get exportProgress => _exportProgress;
+
+  int _currentImageIndex = 0;
+  int get currentImageIndex => _currentImageIndex;
+
+  LocalImageEntry? get currentImageEntry {
+    if (_filteredImageEntries.isEmpty ||
+        _currentImageIndex < 0 ||
+        _currentImageIndex >= _filteredImageEntries.length) {
+      return null;
+    }
+    return _filteredImageEntries[_currentImageIndex];
+  }
+
+  LocalImageMetadata? metadataForPath(String imagePath) {
+    final cached = _metadataCache[imagePath];
+    if (cached != null) {
+      return cached;
+    }
+
+    final entry = _entriesByPath[imagePath];
+    if (entry == null) {
+      return null;
+    }
+
+    if (_pendingMetadataPaths.contains(imagePath)) {
+      return LocalImageMetadata.fallback(
+        entry.lastModified,
+        loadState: MetadataLoadState.loading,
+      );
+    }
+
+    return LocalImageMetadata.fallback(
+      entry.lastModified,
+      loadState: MetadataLoadState.idle,
+    );
+  }
 
   Map<String, Uint8List> get thumbnailCache => _thumbnailCache;
   final Map<String, Uint8List> _thumbnailCache = {};
@@ -115,77 +254,32 @@ class LocalPickerProvider with ChangeNotifier {
   int _cacheMissCount = 0;
   int _diskReadCount = 0;
 
-  // 预缓存已解码图片的内存池 - 减少缓存大小
-  final Map<String, Image> _previewImageCache = {};
-  final int _maxPreviewCacheSize = 5; // 减少到最多缓存5张已解码图片
-  final List<String> _previewCacheKeys = []; // 用于LRU清理
+  final Map<String, FileImage> _imageProviderCache = {};
+  final List<String> _imageProviderKeys = [];
+  final Set<String> _preloadedImagePaths = {};
+  final int _maxImageProviderCacheSize = 10;
 
-  // 新增：真正的预加载图片缓存
-  final Map<String, Widget> _preloadedImageCache = {};
-  final int _maxPreloadedCacheSize = 10; // 预加载图片缓存大小
-  final List<String> _preloadedCacheKeys = []; // 用于LRU清理
-
-  final Set<String> _selectedImagePaths = {};
-  Set<String> get selectedImagePaths => _selectedImagePaths;
-  int _totalImageCount = 0;
-  int get totalImageCount => _totalImageCount;
-
-  final Map<String, bool> _rawFileStatus = {};
-  Map<String, bool> get rawFileStatus => _rawFileStatus;
-
-  double _thumbnailSize = 150.0;
-  double get thumbnailSize => _thumbnailSize;
-
-  bool _isLoading = false;
-  bool get isLoading => _isLoading;
-
-  int _currentImageIndex = 0;
-  int get currentImageIndex => _currentImageIndex;
-
-  bool _isExporting = false;
-  bool get isExporting => _isExporting;
-
-  double _exportProgress = 0.0;
-  double get exportProgress => _exportProgress;
-
-  // 多Isolate池优化 - 根据CPU核心数动态调整
   final List<Isolate?> _isolates = [];
   final List<SendPort?> _sendPorts = [];
   final List<ReceivePort> _receivePorts = [];
   final List<Completer<SendPort>> _sendPortCompleters = [];
 
   int _processingCount = 0;
-  late final int _maxConcurrent; // 根据CPU核心数动态设置
-  late final int _isolateCount; // 根据CPU核心数动态设置
+  late final int _maxConcurrent;
+  late final int _isolateCount;
   final List<_ThumbnailRequest> _requestQueue = [];
   final Set<String> _pendingGeneration = {};
-  int _currentIsolateIndex = 0; // 轮询使用Isolate
-
-  // 批量处理优化 - 进一步减少批量大小
-  final int _batchSize = 2; // 减少到2，进一步提高响应性
-  Timer? _batchTimer;
-
-  // 延迟初始化标志位
+  int _currentIsolateIndex = 0;
+  final int _batchSize = 2;
   bool _isolatesInitialized = false;
+  int _workerGeneration = 0;
+  bool _thumbnailNotifyScheduled = false;
+  bool _disposed = false;
 
-  LocalPickerProvider() {
-    _initCpuBasedSettings();
-    _initCacheDir();
-  }
-
-  /// 根据CPU核心数初始化设置 - 更保守的资源分配
   void _initCpuBasedSettings() {
     final cpuCores = Platform.numberOfProcessors;
-
-    // 更保守的Isolate数量分配，避免过度消耗CPU
-    _isolateCount = (cpuCores / 2).ceil().clamp(1, 6); // 减少Isolate数量
-
-    // 更保守的并发数，为UI线程预留更多资源
-    _maxConcurrent = (cpuCores - 1).ceil().clamp(1, 12); // 大幅减少并发数
-
-    debugPrint(
-      'CPU核心数: $cpuCores, Isolate数量: $_isolateCount, 最大并发数: $_maxConcurrent',
-    );
+    _isolateCount = (cpuCores / 2).ceil().clamp(1, 6);
+    _maxConcurrent = (cpuCores - 1).ceil().clamp(1, 12);
   }
 
   Future<void> _initCacheDir() async {
@@ -193,36 +287,32 @@ class LocalPickerProvider with ChangeNotifier {
     _cacheDir = Directory(p.join(cache.path, 'thumbnails'));
     if (!await _cacheDir!.exists()) {
       await _cacheDir!.create(recursive: true);
-    } else {
-      // Pre-populate the disk cache index
-      final files = _cacheDir!.list();
-      await for (final file in files) {
-        if (file is File) {
-          _diskCacheIndex.add(p.basename(file.path));
-        }
+      return;
+    }
+
+    await for (final entity in _cacheDir!.list()) {
+      if (entity is File) {
+        _diskCacheIndex.add(p.basename(entity.path));
       }
     }
   }
 
-  File _getCacheFileForPath(String path) {
-    final hash = md5.convert(utf8.encode(path)).toString();
+  File _getCacheFileForPath(String imagePath) {
+    final hash = md5.convert(utf8.encode(imagePath)).toString();
     return File(p.join(_cacheDir!.path, '$hash.jpg'));
   }
 
-  String _getCacheKeyForPath(String path) {
-    return '${md5.convert(utf8.encode(path)).toString()}.jpg';
+  String _getCacheKeyForPath(String imagePath) {
+    return '${md5.convert(utf8.encode(imagePath)).toString()}.jpg';
   }
 
-  /// 确保Isolate已初始化（延迟初始化）
   Future<void> ensureIsolatesInitialized() async {
-    if (_isolatesInitialized) return;
-    await _initIsolates();
-    _isolatesInitialized = true;
-  }
+    if (_isolatesInitialized) {
+      return;
+    }
 
-  /// 初始化多个Isolate
-  Future<void> _initIsolates() async {
-    for (int i = 0; i < _isolateCount; i++) {
+    final generation = _workerGeneration;
+    for (var index = 0; index < _isolateCount; index++) {
       final receivePort = ReceivePort();
       final completer = Completer<SendPort>();
 
@@ -235,385 +325,214 @@ class LocalPickerProvider with ChangeNotifier {
         _thumbnailGenerator,
         receivePort.sendPort,
       );
-      _isolates[i] = isolate;
+      if (_disposed ||
+          generation != _workerGeneration ||
+          index >= _isolates.length) {
+        receivePort.close();
+        isolate.kill(priority: Isolate.immediate);
+        return;
+      }
+      _isolates[index] = isolate;
 
       receivePort.listen((dynamic message) {
         if (message is SendPort) {
-          _sendPorts[i] = message;
-          if (!_sendPortCompleters[i].isCompleted) {
-            _sendPortCompleters[i].complete(message);
+          _sendPorts[index] = message;
+          if (!completer.isCompleted) {
+            completer.complete(message);
           }
-        } else if (message is _ThumbnailResult) {
-          _processingCount--;
-          _pendingGeneration.remove(message.path);
+          return;
+        }
 
+        if (message is! _ThumbnailResult) {
+          return;
+        }
+
+        if (_processingCount > 0) {
+          _processingCount--;
+        }
+        if (message.path.isNotEmpty) {
+          _pendingGeneration.remove(message.path);
           if (message.bytes.isNotEmpty) {
             _thumbnailCache[message.path] = message.bytes;
             if (message.cacheKey.isNotEmpty) {
               _diskCacheIndex.add(message.cacheKey);
             }
           }
-          _processNextRequest();
-          notifyListeners();
         }
+        _processNextRequest();
+        _scheduleThumbnailNotify();
       });
+    }
+
+    if (!_disposed && generation == _workerGeneration) {
+      _isolatesInitialized = true;
     }
   }
 
   @override
   void dispose() {
-    _batchTimer?.cancel();
-
-    // 优雅关闭Isolate，避免资源泄漏
-    for (int i = 0; i < _isolates.length; i++) {
-      _isolates[i]?.kill(priority: Isolate.immediate);
-      _receivePorts[i].close();
+    _disposed = true;
+    for (final receivePort in _receivePorts) {
+      receivePort.close();
     }
-    _isolates.clear();
-    _sendPorts.clear();
-    _receivePorts.clear();
-    _sendPortCompleters.clear();
-
-    // 清理所有缓存，释放内存
-    _thumbnailCache.clear();
-    _previewImageCache.clear();
-    _previewCacheKeys.clear();
-    _preloadedImageCache.clear();
-    _preloadedCacheKeys.clear();
-    _diskCacheIndex.clear();
-    _requestQueue.clear();
-    _pendingGeneration.clear();
-
-    super.dispose();
-  }
-
-  void setLoading(bool value) {
-    _isLoading = value;
-    notifyListeners();
-  }
-
-  void setCurrentImageIndex(int index) {
-    if (_currentImageIndex == index) return; // 避免重复设置
-
-    _currentImageIndex = index;
-
-    // 立即通知UI更新，确保响应性
-    notifyListeners();
-
-    // 立即执行RAW文件检查，确保UI信息及时更新
-    Future.microtask(() {
-      checkRawFileForCurrentImage();
-    });
-  }
-
-  void nextImage() {
-    if (_currentImageIndex < _imagePaths.length - 1) {
-      _currentImageIndex++;
-      checkRawFileForCurrentImage();
-      notifyListeners();
-    }
-  }
-
-  void previousImage() {
-    if (_currentImageIndex > 0) {
-      _currentImageIndex--;
-      checkRawFileForCurrentImage();
-      notifyListeners();
-    }
-  }
-
-  void precacheAdjacentImages(
-    BuildContext context, {
-    bool isScrolling = false,
-  }) {
-    if (_imagePaths.isEmpty) return;
-
-    // 使用新的预加载机制，确保图片真正预加载到内存
-    preloadAdjacentImages(context);
-  }
-
-  /// 预加载指定范围的图片预览版本 - 优化性能
-  Future<void> preloadImagePreviews(int startIndex, int count) async {
-    if (_imagePaths.isEmpty) return;
-
-    // 添加节流机制，避免频繁调用
-    await Future.delayed(const Duration(milliseconds: 100));
-
-    for (int i = 0; i < count; i++) {
-      final index = startIndex + i;
-      if (index >= 0 && index < _imagePaths.length) {
-        final imagePath = _imagePaths[index];
-
-        // 只在内存池未满时预加载
-        if (_previewCacheKeys.length < _maxPreviewCacheSize) {
-          _preloadImageToMemoryPool(imagePath);
-        }
-
-        // 限制缩略图生成的频率
-        if (!_thumbnailCache.containsKey(imagePath) &&
-            !_pendingGeneration.contains(imagePath) &&
-            _processingCount < (_maxConcurrent / 2)) {
-          // 只在低负载时生成
-          final cacheKey = _getCacheKeyForPath(imagePath);
-          if (!_diskCacheIndex.contains(cacheKey)) {
-            _queueThumbnailGeneration(imagePath);
-          } else {
-            // 异步加载磁盘缓存，添加延迟避免过度I/O
-            Future.delayed(const Duration(milliseconds: 50), () {
-              unawaited(_loadFromDiskCache(imagePath));
-            });
-          }
-        }
-      }
-
-      // 增加延迟，进一步减少CPU压力
-      await Future.delayed(const Duration(milliseconds: 10));
-    }
-  }
-
-  /// 预加载图片到内存池
-  void _preloadImageToMemoryPool(String imagePath) {
-    if (_previewImageCache.containsKey(imagePath)) {
-      // 图片已在缓存中，更新LRU位置
-      _previewCacheKeys.remove(imagePath);
-      _previewCacheKeys.add(imagePath);
-      return;
-    }
-
-    // 异步预加载图片
-    unawaited(_loadImageToMemoryPool(imagePath));
-  }
-
-  /// 异步加载图片到内存池 - 优化内存使用
-  Future<void> _loadImageToMemoryPool(String imagePath) async {
-    try {
-      final image = Image.file(
-        File(imagePath),
-        fit: BoxFit.contain,
-        gaplessPlayback: true,
-        filterQuality: FilterQuality.medium,
-        // 修复长宽比：只限制宽度，让高度自适应保持原始长宽比
-        cacheWidth: 1920, // 限制最大宽度为1920px，高度自适应
-        // 移除cacheHeight，避免强制拉伸破坏长宽比
-        isAntiAlias: false, // 禁用抗锯齿提高性能
-      );
-
-      // 添加到缓存
-      _addToPreviewCache(imagePath, image);
-    } catch (e) {
-      debugPrint('Failed to preload image $imagePath: $e');
-    }
-  }
-
-  /// 添加图片到预览缓存，管理LRU
-  void _addToPreviewCache(String imagePath, Image image) {
-    // 如果缓存已满，移除最老的图片
-    while (_previewCacheKeys.length >= _maxPreviewCacheSize) {
-      final oldestKey = _previewCacheKeys.removeAt(0);
-      _previewImageCache.remove(oldestKey);
-    }
-
-    // 添加新图片
-    _previewImageCache[imagePath] = image;
-    _previewCacheKeys.add(imagePath);
-  }
-
-  /// 获取预缓存的图片
-  Image? getCachedPreviewImage(String imagePath) {
-    final cachedImage = _previewImageCache[imagePath];
-    if (cachedImage != null) {
-      // 更新LRU位置
-      _previewCacheKeys.remove(imagePath);
-      _previewCacheKeys.add(imagePath);
-    }
-    return cachedImage;
-  }
-
-  /// 获取预加载的图片
-  Widget? getPreloadedImage(String imagePath) {
-    final preloadedImage = _preloadedImageCache[imagePath];
-    if (preloadedImage != null) {
-      // 更新LRU位置
-      _preloadedCacheKeys.remove(imagePath);
-      _preloadedCacheKeys.add(imagePath);
-    }
-    return preloadedImage;
-  }
-
-  /// 添加预加载的图片到缓存
-  void addPreloadedImage(String imagePath, Widget imageWidget) {
-    // 如果缓存已满，移除最老的图片
-    while (_preloadedCacheKeys.length >= _maxPreloadedCacheSize) {
-      final oldestKey = _preloadedCacheKeys.removeAt(0);
-      _preloadedImageCache.remove(oldestKey);
-    }
-
-    // 添加新图片
-    _preloadedImageCache[imagePath] = imageWidget;
-    _preloadedCacheKeys.add(imagePath);
-  }
-
-  /// 立即预加载相邻图片
-  void preloadAdjacentImages(BuildContext context) {
-    if (_imagePaths.isEmpty) {
-      return;
-    }
-
-    // 预加载前后各1张图片
-    final indicesToPreload = [_currentImageIndex - 1, _currentImageIndex + 1];
-
-    for (final index in indicesToPreload) {
-      if (index >= 0 && index < _imagePaths.length) {
-        final imagePath = _imagePaths[index];
-
-        // 如果还没有预加载，则开始预加载
-        if (!_preloadedImageCache.containsKey(imagePath)) {
-          // 使用Flutter的precacheImage进行真正的预加载
-          precacheImage(
-                FileImage(File(imagePath)),
-                context,
-                size: const Size(1920, 1080), // 指定预加载尺寸
-              )
-              .then((_) {
-                // 预加载完成后，创建Widget并缓存
-                final imageWidget = Image.file(
-                  File(imagePath),
-                  fit: BoxFit.contain,
-                  gaplessPlayback: true,
-                  filterQuality: FilterQuality.medium,
-                  cacheWidth: 1920,
-                  isAntiAlias: false,
-                );
-                addPreloadedImage(imagePath, imageWidget);
-              })
-              .catchError((error) {
-                debugPrint('Failed to precache image $imagePath: $error');
-              });
-        }
-      }
-    }
-  }
-
-  /// 预加载当前图片
-  void preloadCurrentImage(BuildContext context) {
-    if (_imagePaths.isEmpty || _currentImageIndex >= _imagePaths.length) {
-      return;
-    }
-
-    final currentImagePath = _imagePaths[_currentImageIndex];
-
-    // 如果当前图片还没有预加载，则立即预加载
-    if (!_preloadedImageCache.containsKey(currentImagePath)) {
-      precacheImage(
-            FileImage(File(currentImagePath)),
-            context,
-            size: const Size(1920, 1080),
-          )
-          .then((_) {
-            final imageWidget = Image.file(
-              File(currentImagePath),
-              fit: BoxFit.contain,
-              gaplessPlayback: true,
-              filterQuality: FilterQuality.medium,
-              cacheWidth: 1920,
-              isAntiAlias: false,
-            );
-            addPreloadedImage(currentImagePath, imageWidget);
-          })
-          .catchError((error) {
-            debugPrint(
-              'Failed to precache current image $currentImagePath: $error',
-            );
-          });
-    }
-  }
-
-  Future<void> selectFolder() async {
-    setLoading(true);
-
-    // 立即清理状态，不等待Isolate操作
-    _imagePaths.clear();
-    _selectedImagePaths.clear();
-    _thumbnailCache.clear();
-    _currentDirectory = null;
-    _hasMore = true;
-    _totalImageCount = 0;
-    notifyListeners();
-
-    // 后台异步重置和初始化Isolate，不阻塞UI
-    unawaited(_resetIsolatesAsync());
-
-    try {
-      final selectedDirectory = await FilePicker.platform.getDirectoryPath();
-      if (selectedDirectory != null) {
-        _currentDirectory = selectedDirectory;
-        _calculateTotalImageCount();
-        await _loadMoreImages();
-      }
-    } catch (e) {
-      debugPrint('Error selecting folder: $e');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  /// 异步重置Isolate，不阻塞UI
-  Future<void> _resetIsolatesAsync() async {
     for (final isolate in _isolates) {
       isolate?.kill(priority: Isolate.immediate);
     }
+    _receivePorts.clear();
     _isolates.clear();
     _sendPorts.clear();
+    _sendPortCompleters.clear();
+    super.dispose();
+  }
+
+  Future<void> selectFolder() async {
+    final selectedDirectory = await FilePicker.platform.getDirectoryPath();
+    if (selectedDirectory == null) {
+      return;
+    }
+    await loadDirectory(selectedDirectory);
+  }
+
+  Future<void> loadDirectory(String directoryPath) async {
+    _isLoading = true;
+    notifyListeners();
+
+    try {
+      await _resetSessionState(clearDirectory: false);
+      _currentDirectory = directoryPath;
+      final entries = await _scanDirectory(
+        directoryPath,
+        recursive: _scanScope == FolderScanScope.recursive,
+      );
+      _allImageEntries
+        ..clear()
+        ..addAll(entries);
+      _entriesByPath
+        ..clear()
+        ..addEntries(entries.map((entry) => MapEntry(entry.path, entry)));
+      _rebuildVisibleEntries(resetVisible: true);
+      _warmVisibleThumbnails(startIndex: 0, count: _visibleCount);
+      if (_showCaptureInfo) {
+        _warmVisibleMetadata(startIndex: 0, count: _visibleCount);
+      }
+    } catch (error) {
+      debugPrint('Error loading local picker directory: $error');
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _resetSessionState({bool clearDirectory = true}) async {
+    _allImageEntries.clear();
+    _filteredImageEntries.clear();
+    _entriesByPath.clear();
+    _selectedImagePaths.clear();
+    _metadataCache.clear();
+    _pendingMetadataPaths.clear();
+    _visibleCount = 0;
+    _currentImageIndex = 0;
+    _exportProgress = 0.0;
+    _isExporting = false;
+    _requestQueue.clear();
+    _pendingGeneration.clear();
+    _processingCount = 0;
+    if (clearDirectory) {
+      _currentDirectory = null;
+    }
+    await clearMemoryCache(notify: false);
+    _resetThumbnailWorkers();
+  }
+
+  void _resetThumbnailWorkers() {
+    _workerGeneration++;
+    for (final receivePort in _receivePorts) {
+      receivePort.close();
+    }
+    for (final isolate in _isolates) {
+      isolate?.kill(priority: Isolate.immediate);
+    }
     _receivePorts.clear();
+    _isolates.clear();
+    _sendPorts.clear();
     _sendPortCompleters.clear();
     _isolatesInitialized = false;
-    // 在后台异步初始化，不阻塞UI - 使用unawaited
-    unawaited(ensureIsolatesInitialized());
+    _currentIsolateIndex = 0;
   }
 
-  Future<void> loadMoreImages() async {
-    if (isLoading || !_hasMore || _currentDirectory == null) return;
-    setLoading(true);
-    try {
-      await _loadMoreImages();
-    } finally {
-      setLoading(false);
+  Future<void> setScanScope(FolderScanScope scope) async {
+    if (_scanScope == scope) {
+      return;
     }
+    _scanScope = scope;
+    if (_currentDirectory == null) {
+      notifyListeners();
+      return;
+    }
+    await loadDirectory(_currentDirectory!);
   }
 
-  Future<void> _loadMoreImages() async {
-    if (_currentDirectory == null) return;
-    try {
-      final dir = Directory(_currentDirectory!);
-      final files = await dir
-          .list()
-          .where((entity) {
-            if (entity is! File) return false;
-            final extension = p.extension(entity.path).toLowerCase();
-            return ['.jpg', '.jpeg', '.png', '.heic'].contains(extension);
-          })
-          .skip(_imagePaths.length)
-          .take(_pageSize)
-          .map((entity) => entity.path)
-          .toList();
+  void setSortMode(LocalPickerSortMode mode) {
+    if (_sortMode == mode) {
+      return;
+    }
+    _sortMode = mode;
+    _rebuildVisibleEntries(resetVisible: true);
+    _warmVisibleThumbnails(startIndex: 0, count: _visibleCount);
+    if (_showCaptureInfo) {
+      _warmVisibleMetadata(startIndex: 0, count: _visibleCount);
+    }
+    notifyListeners();
+  }
 
-      if (files.length < _pageSize) {
-        _hasMore = false;
+  void setFilterMode(LocalPickerFilterMode mode) {
+    if (_filterMode == mode) {
+      return;
+    }
+    _filterMode = mode;
+    _rebuildVisibleEntries(resetVisible: true);
+    _warmVisibleThumbnails(startIndex: 0, count: _visibleCount);
+    if (_showCaptureInfo) {
+      _warmVisibleMetadata(startIndex: 0, count: _visibleCount);
+    }
+    notifyListeners();
+  }
+
+  void setShowCaptureInfo(bool value) {
+    if (_showCaptureInfo == value) {
+      return;
+    }
+    _showCaptureInfo = value;
+    if (_showCaptureInfo) {
+      _warmVisibleMetadata(startIndex: 0, count: _visibleCount);
+      final currentPath = currentImageEntry?.path;
+      if (currentPath != null) {
+        unawaited(ensureMetadataLoaded(currentPath));
       }
-
-      _imagePaths.addAll(files);
-      await _regenerateThumbnails();
-      _prewarmCache(files);
-
-      // 减少初始预加载数量，避免启动时CPU峰值
-      unawaited(preloadImagePreviews(0, 3));
-
-      notifyListeners();
-    } catch (e) {
-      debugPrint('Error loading more images: $e');
-      _hasMore = false;
-      notifyListeners();
     }
+    notifyListeners();
+  }
+
+  void loadMoreImages() {
+    if (!hasMore) {
+      return;
+    }
+    final previousVisibleCount = _visibleCount;
+    _visibleCount = (_visibleCount + _pageSize).clamp(
+      0,
+      _filteredImageEntries.length,
+    );
+    _warmVisibleThumbnails(
+      startIndex: previousVisibleCount,
+      count: _visibleCount - previousVisibleCount,
+    );
+    if (_showCaptureInfo) {
+      _warmVisibleMetadata(
+        startIndex: previousVisibleCount,
+        count: _visibleCount - previousVisibleCount,
+      );
+    }
+    notifyListeners();
   }
 
   void toggleSelection(String imagePath) {
@@ -626,126 +545,27 @@ class LocalPickerProvider with ChangeNotifier {
   }
 
   void selectAll() {
-    _selectedImagePaths.addAll(_imagePaths);
+    _selectedImagePaths.addAll(
+      _filteredImageEntries.map((entry) => entry.path),
+    );
     notifyListeners();
   }
 
   void deselectAll() {
-    _selectedImagePaths.clear();
+    final filteredPaths = _filteredImageEntries.map((entry) => entry.path).toSet();
+    _selectedImagePaths.removeWhere(filteredPaths.contains);
     notifyListeners();
   }
 
-  Future<Uint8List?> getThumbnail(String path) async {
-    // 1. Check memory cache
-    if (_thumbnailCache.containsKey(path)) {
-      _cacheHitCount++;
-      return _thumbnailCache[path];
-    }
-
-    // 2. Check if currently being generated
-    if (_pendingGeneration.contains(path)) {
-      return null;
-    }
-
-    // 3. Check disk cache index (no I/O)
-    final cacheKey = _getCacheKeyForPath(path);
-    if (!_diskCacheIndex.contains(cacheKey)) {
-      _cacheMissCount++;
-      _queueThumbnailGeneration(path);
-      return null;
-    }
-
-    // 4. 异步读取磁盘缓存
-    _loadFromDiskCache(path);
-    return null;
-  }
-
-  /// 异步加载磁盘缓存
-  Future<void> _loadFromDiskCache(String path) async {
-    final cacheFile = _getCacheFileForPath(path);
-    _diskReadCount++;
-    try {
-      // 检查文件是否存在
-      if (!await cacheFile.exists()) {
-        final cacheKey = _getCacheKeyForPath(path);
-        _diskCacheIndex.remove(cacheKey);
-        _cacheMissCount++;
-        return;
-      }
-
-      final bytes = await cacheFile.readAsBytes();
-      if (bytes.isEmpty) {
-        final cacheKey = _getCacheKeyForPath(path);
-        _diskCacheIndex.remove(cacheKey);
-        try {
-          await cacheFile.delete();
-        } catch (deleteError) {
-          debugPrint('Error deleting empty cache file: $deleteError');
-        }
-        _cacheMissCount++;
-        return;
-      }
-      _thumbnailCache[path] = bytes;
-      _cacheHitCount++;
-      notifyListeners();
-    } catch (e) {
-      debugPrint('Error reading cache file for $path: $e');
-      final cacheKey = _getCacheKeyForPath(path);
-      _diskCacheIndex.remove(cacheKey);
-
-      // 只有当文件确实存在时才尝试删除
-      try {
-        if (await cacheFile.exists()) {
-          await cacheFile.delete();
-        }
-      } catch (deleteError) {
-        debugPrint('Error deleting problematic cache file: $deleteError');
-      }
-      _cacheMissCount++;
-    }
-  }
-
-  /// 队列缩略图生成请求 - 添加优先级控制
-  void _queueThumbnailGeneration(String path) {
-    if (_pendingGeneration.contains(path)) return;
-
-    // 限制队列大小，避免过度积压
-    if (_requestQueue.length > 50) {
-      return; // 队列过长时跳过新请求
-    }
-
-    final cacheFile = _getCacheFileForPath(path);
-    // 降低缩略图尺寸，减少处理时间和内存占用
-    final request = _ThumbnailRequest(path, 250, cacheFile.path); // 从300降到250
-    _requestQueue.add(request);
-    _processNextRequest();
-  }
-
-  Future<void> _prewarmCache(List<String> pathsToPrewarm) async {
-    for (final path in pathsToPrewarm) {
-      if (!_thumbnailCache.containsKey(path)) {
-        final cacheKey = _getCacheKeyForPath(path);
-        if (_diskCacheIndex.contains(cacheKey)) {
-          final cacheFile = _getCacheFileForPath(path);
-          try {
-            final bytes = await cacheFile.readAsBytes();
-            if (bytes.isNotEmpty) {
-              _thumbnailCache[path] = bytes;
-            }
-          } catch (e) {
-            // Ignore errors
-          }
-        }
-      }
-      await Future.delayed(Duration.zero);
-    }
-  }
-
   void invertSelection() {
-    final allImagePaths = _imagePaths.toSet();
-    final currentSelection = _selectedImagePaths.toSet();
-    _selectedImagePaths.clear();
-    _selectedImagePaths.addAll(allImagePaths.difference(currentSelection));
+    final filteredPaths = _filteredImageEntries.map((entry) => entry.path).toSet();
+    for (final path in filteredPaths) {
+      if (_selectedImagePaths.contains(path)) {
+        _selectedImagePaths.remove(path);
+      } else {
+        _selectedImagePaths.add(path);
+      }
+    }
     notifyListeners();
   }
 
@@ -754,36 +574,247 @@ class LocalPickerProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _regenerateThumbnails() async {
-    if (_cacheDir == null) await _initCacheDir();
+  void setCurrentImageIndex(int index) {
+    if (_filteredImageEntries.isEmpty) {
+      _currentImageIndex = 0;
+      return;
+    }
+    final clamped = index.clamp(0, _filteredImageEntries.length - 1);
+    if (_currentImageIndex == clamped) {
+      return;
+    }
+    _currentImageIndex = clamped;
+    if (_showCaptureInfo) {
+      final currentPath = _filteredImageEntries[clamped].path;
+      unawaited(ensureMetadataLoaded(currentPath));
+    }
+    notifyListeners();
+  }
 
-    for (int i = 0; i < _imagePaths.length; i++) {
-      final imagePath = _imagePaths[i];
-      if (!_thumbnailCache.containsKey(imagePath) &&
-          !_pendingGeneration.contains(imagePath)) {
-        final cacheKey = _getCacheKeyForPath(imagePath);
-        if (!_diskCacheIndex.contains(cacheKey)) {
-          _queueThumbnailGeneration(imagePath);
-        } else {
-          _loadFromDiskCache(imagePath);
-        }
+  void nextImage() {
+    setCurrentImageIndex(_currentImageIndex + 1);
+  }
+
+  void previousImage() {
+    setCurrentImageIndex(_currentImageIndex - 1);
+  }
+
+  bool hasRawForPath(String imagePath) {
+    return _entriesByPath[imagePath]?.hasRaw ?? false;
+  }
+
+  String? rawPathForImage(String imagePath) {
+    return _entriesByPath[imagePath]?.rawPath;
+  }
+
+  Future<void> clearMemoryCache({bool notify = true}) async {
+    _thumbnailCache.clear();
+    _requestQueue.clear();
+    _pendingGeneration.clear();
+    _processingCount = 0;
+
+    final providers = _imageProviderCache.values.toList(growable: false);
+    _imageProviderCache.clear();
+    _imageProviderKeys.clear();
+    _preloadedImagePaths.clear();
+
+    for (final provider in providers) {
+      await provider.evict();
+    }
+
+    if (notify) {
+      notifyListeners();
+    }
+  }
+
+  Future<void> ensureMetadataLoaded(String imagePath) async {
+    if (!_showCaptureInfo ||
+        _metadataCache.containsKey(imagePath) ||
+        _pendingMetadataPaths.contains(imagePath)) {
+      return;
+    }
+
+    final entry = _entriesByPath[imagePath];
+    if (entry == null) {
+      return;
+    }
+
+    _pendingMetadataPaths.add(imagePath);
+    notifyListeners();
+
+    try {
+      final metadata = await _loadMetadataForEntry(entry);
+      if (_entriesByPath.containsKey(imagePath)) {
+        _metadataCache[imagePath] = metadata;
+      }
+    } catch (error) {
+      debugPrint('Failed to load metadata for $imagePath: $error');
+      if (_entriesByPath.containsKey(imagePath)) {
+        _metadataCache[imagePath] = LocalImageMetadata.fallback(
+          entry.lastModified,
+        );
+      }
+    } finally {
+      _pendingMetadataPaths.remove(imagePath);
+      if (!_disposed) {
+        notifyListeners();
       }
     }
   }
 
-  /// 优化的请求处理：支持批量处理和多Isolate
+  Future<LocalImageMetadata> _loadMetadataForEntry(LocalImageEntry entry) async {
+    if (!ExifService.isSupportedImage(entry.path)) {
+      return LocalImageMetadata.fallback(entry.lastModified);
+    }
+
+    final exifData = await ExifService.readExifFromFile(entry.path);
+    final translated = exifData.translatedData;
+    final captureTime = _parseCaptureTime(translated['拍摄时间']);
+
+    if (!exifData.hasExif || captureTime == null) {
+      return LocalImageMetadata.fallback(entry.lastModified);
+    }
+
+    return LocalImageMetadata(
+      captureTime: captureTime,
+      captureTimeSource: CaptureTimeSource.exif,
+      loadState: MetadataLoadState.loaded,
+      cameraModel: _nullIfBlank(translated['相机型号']),
+      aperture: _nullIfBlank(translated['光圈值']),
+      shutterSpeed:
+          _nullIfBlank(translated['快门速度']) ??
+          _nullIfBlank(translated['曝光时间']),
+      iso: _nullIfBlank(translated['ISO感光度']),
+      focalLength: _nullIfBlank(translated['焦距']),
+    );
+  }
+
+  void _warmVisibleMetadata({required int startIndex, required int count}) {
+    if (!_showCaptureInfo || count <= 0 || _filteredImageEntries.isEmpty) {
+      return;
+    }
+
+    final endExclusive = (startIndex + count).clamp(
+      0,
+      _filteredImageEntries.length,
+    );
+    for (var index = startIndex; index < endExclusive; index++) {
+      final imagePath = _filteredImageEntries[index].path;
+      unawaited(ensureMetadataLoaded(imagePath));
+    }
+  }
+
+  void _warmMetadataForIndex(int index) {
+    if (!_showCaptureInfo ||
+        index < 0 ||
+        index >= _filteredImageEntries.length) {
+      return;
+    }
+    unawaited(ensureMetadataLoaded(_filteredImageEntries[index].path));
+  }
+
+  DateTime? _parseCaptureTime(String? value) {
+    if (value == null || value.trim().isEmpty) {
+      return null;
+    }
+    return DateTime.tryParse(value.replaceFirst(' ', 'T'));
+  }
+
+  String? _nullIfBlank(String? value) {
+    if (value == null) {
+      return null;
+    }
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? null : trimmed;
+  }
+
+  Future<Uint8List?> getThumbnail(String imagePath) async {
+    if (_thumbnailCache.containsKey(imagePath)) {
+      _cacheHitCount++;
+      return _thumbnailCache[imagePath];
+    }
+
+    if (_pendingGeneration.contains(imagePath)) {
+      return null;
+    }
+
+    if (_cacheDir == null) {
+      await _initCacheDir();
+    }
+
+    final cacheKey = _getCacheKeyForPath(imagePath);
+    if (!_diskCacheIndex.contains(cacheKey)) {
+      _cacheMissCount++;
+      _queueThumbnailGeneration(imagePath);
+      return null;
+    }
+
+    unawaited(_loadFromDiskCache(imagePath));
+    return null;
+  }
+
+  Future<void> _loadFromDiskCache(String imagePath) async {
+    final cacheFile = _getCacheFileForPath(imagePath);
+    _diskReadCount++;
+    try {
+      if (!await cacheFile.exists()) {
+        _diskCacheIndex.remove(_getCacheKeyForPath(imagePath));
+        _cacheMissCount++;
+        return;
+      }
+
+      final bytes = await cacheFile.readAsBytes();
+      if (bytes.isEmpty) {
+        _diskCacheIndex.remove(_getCacheKeyForPath(imagePath));
+        try {
+          await cacheFile.delete();
+        } catch (_) {}
+        _cacheMissCount++;
+        return;
+      }
+
+      _thumbnailCache[imagePath] = bytes;
+      _cacheHitCount++;
+      _scheduleThumbnailNotify();
+    } catch (error) {
+      debugPrint('Error reading thumbnail cache for $imagePath: $error');
+      _diskCacheIndex.remove(_getCacheKeyForPath(imagePath));
+      try {
+        if (await cacheFile.exists()) {
+          await cacheFile.delete();
+        }
+      } catch (_) {}
+      _cacheMissCount++;
+    }
+  }
+
+  void _queueThumbnailGeneration(String imagePath) {
+    if (_pendingGeneration.contains(imagePath) || _cacheDir == null) {
+      return;
+    }
+    if (_requestQueue.length > 50) {
+      return;
+    }
+
+    final request = _ThumbnailRequest(
+      imagePath,
+      250,
+      _getCacheFileForPath(imagePath).path,
+    );
+    _requestQueue.add(request);
+    _processNextRequest();
+  }
+
   void _processNextRequest() {
     if (_requestQueue.isEmpty || _processingCount >= _maxConcurrent) {
       return;
     }
 
-    // 确保Isolate已初始化，如果没有则异步初始化
     if (!_isolatesInitialized) {
       unawaited(ensureIsolatesInitialized().then((_) => _processNextRequest()));
       return;
     }
 
-    // 批量处理优化：收集多个请求一起发送
     final batchRequests = <_ThumbnailRequest>[];
     while (batchRequests.length < _batchSize &&
         _requestQueue.isNotEmpty &&
@@ -794,130 +825,455 @@ class LocalPickerProvider with ChangeNotifier {
       _processingCount++;
     }
 
-    if (batchRequests.isNotEmpty) {
-      // 轮询选择Isolate
-      final isolateIndex = _currentIsolateIndex % _isolateCount;
-      _currentIsolateIndex++;
-
-      // 等待SendPort准备好
-      _sendPortCompleters[isolateIndex].future.then((sendPort) {
-        if (batchRequests.length == 1) {
-          // 单个请求直接发送
-          sendPort.send(batchRequests.first);
-        } else {
-          // 多个请求批量发送
-          sendPort.send(_BatchThumbnailRequest(batchRequests));
-        }
-      });
-    }
-  }
-
-  Future<void> exportSelected(BuildContext context) async {
-    if (_selectedImagePaths.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('没有选择任何图片')));
+    if (batchRequests.isEmpty) {
       return;
     }
 
-    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final isolateIndex = _currentIsolateIndex % _isolateCount;
+    _currentIsolateIndex++;
+    _sendPortCompleters[isolateIndex].future.then((sendPort) {
+      if (batchRequests.length == 1) {
+        sendPort.send(batchRequests.first);
+      } else {
+        sendPort.send(_BatchThumbnailRequest(batchRequests));
+      }
+    });
+  }
+
+  void _warmVisibleThumbnails({required int startIndex, required int count}) {
+    if (count <= 0 || _filteredImageEntries.isEmpty) {
+      return;
+    }
+
+    final endExclusive = (startIndex + count).clamp(
+      0,
+      _filteredImageEntries.length,
+    );
+    for (var index = startIndex; index < endExclusive; index++) {
+      final imagePath = _filteredImageEntries[index].path;
+      if (_thumbnailCache.containsKey(imagePath) ||
+          _pendingGeneration.contains(imagePath)) {
+        continue;
+      }
+      final cacheKey = _getCacheKeyForPath(imagePath);
+      if (_diskCacheIndex.contains(cacheKey)) {
+        unawaited(_loadFromDiskCache(imagePath));
+      } else {
+        _queueThumbnailGeneration(imagePath);
+      }
+    }
+  }
+
+  void _scheduleThumbnailNotify() {
+    if (_thumbnailNotifyScheduled || _disposed) {
+      return;
+    }
+    _thumbnailNotifyScheduled = true;
+    scheduleMicrotask(() {
+      _thumbnailNotifyScheduled = false;
+      if (!_disposed) {
+        notifyListeners();
+      }
+    });
+  }
+
+  FileImage getImageProvider(String imagePath) {
+    final cached = _imageProviderCache[imagePath];
+    if (cached != null) {
+      _imageProviderKeys.remove(imagePath);
+      _imageProviderKeys.add(imagePath);
+      return cached;
+    }
+
+    final provider = FileImage(File(imagePath));
+    while (_imageProviderKeys.length >= _maxImageProviderCacheSize) {
+      final oldestPath = _imageProviderKeys.removeAt(0);
+      _preloadedImagePaths.remove(oldestPath);
+      _imageProviderCache.remove(oldestPath);
+    }
+    _imageProviderCache[imagePath] = provider;
+    _imageProviderKeys.add(imagePath);
+    return provider;
+  }
+
+  void preloadAdjacentImages(BuildContext context) {
+    if (_filteredImageEntries.isEmpty) {
+      return;
+    }
+    for (final index in [
+      _currentImageIndex - 1,
+      _currentImageIndex + 1,
+    ]) {
+      _precacheImageAtIndex(context, index);
+      _warmMetadataForIndex(index);
+    }
+  }
+
+  void preloadCurrentImage(BuildContext context) {
+    _precacheImageAtIndex(context, _currentImageIndex);
+    _warmMetadataForIndex(_currentImageIndex);
+  }
+
+  void _precacheImageAtIndex(BuildContext context, int index) {
+    if (index < 0 || index >= _filteredImageEntries.length) {
+      return;
+    }
+    final imagePath = _filteredImageEntries[index].path;
+    if (_preloadedImagePaths.contains(imagePath)) {
+      return;
+    }
+
+    final provider = getImageProvider(imagePath);
+    _preloadedImagePaths.add(imagePath);
+    unawaited(
+      precacheImage(
+        provider,
+        context,
+        size: const Size(1920, 1080),
+      ).catchError((error) {
+        debugPrint('Failed to precache image $imagePath: $error');
+      }),
+    );
+  }
+
+  Future<LocalPickerExportResult> exportSelectedToDirectory(
+    LocalPickerExportOptions options,
+  ) async {
+    if (_selectedImagePaths.isEmpty) {
+      return const LocalPickerExportResult(
+        exportedImageCount: 0,
+        exportedRawCount: 0,
+        renamedCount: 0,
+        skippedCount: 0,
+        failedCount: 0,
+        issues: [],
+      );
+    }
+
+    final targetDirectory = Directory(options.targetDirectory);
+    if (!await targetDirectory.exists()) {
+      await targetDirectory.create(recursive: true);
+    }
+
+    final existingFileNames = <String>{};
+    await for (final entity in targetDirectory.list(recursive: false)) {
+      if (entity is File) {
+        existingFileNames.add(p.basename(entity.path));
+      }
+    }
+
+    _isExporting = true;
+    _exportProgress = 0;
+    notifyListeners();
+
+    final selectedEntries = _allImageEntries
+        .where((entry) => _selectedImagePaths.contains(entry.path))
+        .toList(growable: false);
+
+    var exportedImageCount = 0;
+    var exportedRawCount = 0;
+    var renamedCount = 0;
+    var skippedCount = 0;
+    var failedCount = 0;
+    final issues = <LocalPickerExportIssue>[];
 
     try {
-      String? targetDirectory = await FilePicker.platform.getDirectoryPath();
-      if (targetDirectory != null) {
-        _isExporting = true;
-        _exportProgress = 0.0;
-        notifyListeners();
+      for (var index = 0; index < selectedEntries.length; index++) {
+        final entry = selectedEntries[index];
+        var itemRenamed = false;
+        try {
+          final resolved = _resolveExportNames(
+            entry: entry,
+            existingFileNames: existingFileNames,
+            options: options,
+          );
 
-        int i = 0;
-        for (var imagePath in _selectedImagePaths) {
-          final imageFile = File(imagePath);
-          final newPath = p.join(targetDirectory, p.basename(imageFile.path));
-          await imageFile.copy(newPath);
-          i++;
-          _exportProgress = i / _selectedImagePaths.length;
-          if (i % 5 == 0 || i == _selectedImagePaths.length) {
+          if (resolved.imageSkipped || resolved.imageFileName == null) {
+            skippedCount++;
+            issues.add(
+              LocalPickerExportIssue(
+                sourcePath: entry.path,
+                message: '目标文件已存在，按策略跳过',
+              ),
+            );
+            _exportProgress = (index + 1) / selectedEntries.length;
+            notifyListeners();
+            continue;
+          }
+
+          final imageTargetPath = p.join(
+            options.targetDirectory,
+            resolved.imageFileName!,
+          );
+          await _copyWithConflictAction(
+            sourcePath: entry.path,
+            targetPath: imageTargetPath,
+            action: options.conflictAction,
+          );
+          existingFileNames.add(resolved.imageFileName!);
+          exportedImageCount++;
+          itemRenamed = resolved.wasRenamed;
+
+          if (options.includeRaw && entry.rawPath != null) {
+            if (resolved.rawSkipped || resolved.rawFileName == null) {
+              skippedCount++;
+              issues.add(
+                LocalPickerExportIssue(
+                  sourcePath: entry.rawPath!,
+                  message: 'RAW 目标文件已存在，按策略跳过',
+                  isRaw: true,
+                ),
+              );
+            } else {
+              final rawTargetPath = p.join(
+                options.targetDirectory,
+                resolved.rawFileName!,
+              );
+              await _copyWithConflictAction(
+                sourcePath: entry.rawPath!,
+                targetPath: rawTargetPath,
+                action: options.conflictAction,
+              );
+              existingFileNames.add(resolved.rawFileName!);
+              exportedRawCount++;
+            }
+          }
+
+          if (itemRenamed) {
+            renamedCount++;
+          }
+        } catch (error) {
+          failedCount++;
+          issues.add(
+            LocalPickerExportIssue(
+              sourcePath: entry.path,
+              message: '导出失败: $error',
+            ),
+          );
+        } finally {
+          _exportProgress = (index + 1) / selectedEntries.length;
+          if ((index + 1) % 5 == 0 || index == selectedEntries.length - 1) {
             notifyListeners();
           }
         }
-
-        scaffoldMessenger.showSnackBar(
-          SnackBar(content: Text('成功导出 ${_selectedImagePaths.length} 张图片')),
-        );
       }
-    } catch (e) {
-      scaffoldMessenger.showSnackBar(SnackBar(content: Text('导出失败: $e')));
     } finally {
       _isExporting = false;
       notifyListeners();
     }
+
+    return LocalPickerExportResult(
+      exportedImageCount: exportedImageCount,
+      exportedRawCount: exportedRawCount,
+      renamedCount: renamedCount,
+      skippedCount: skippedCount,
+      failedCount: failedCount,
+      issues: issues,
+    );
   }
 
-  Future<void> checkRawFileForCurrentImage() async {
-    if (_imagePaths.isEmpty) return;
-    final currentImagePath = _imagePaths[_currentImageIndex];
-    if (_rawFileStatus.containsKey(currentImagePath)) return;
+  _ResolvedExportName _resolveExportNames({
+    required LocalImageEntry entry,
+    required Set<String> existingFileNames,
+    required LocalPickerExportOptions options,
+  }) {
+    final desiredImageFileName = entry.fileName;
+    final desiredRawFileName = entry.rawPath == null
+        ? null
+        : '${p.basenameWithoutExtension(entry.fileName)}${p.extension(entry.rawPath!).toLowerCase()}';
 
-    const rawExtensions = [
-      '.CR2',
-      '.CR3',
-      '.NEF',
-      '.ARW',
-      '.DNG',
-      '.RAF',
-      '.RW2',
-      '.ORF',
-      '.PEF',
-      '.SRW',
-      '.GPR',
-      '.3FR',
-      '.FFF',
-      '.DCR',
-      '.KDC',
-      '.MRW',
-      '.MOS',
-      '.X3F',
-    ];
-    final fileDirectory = p.dirname(currentImagePath);
-    final fileNameWithoutExtension = p.basenameWithoutExtension(
-      currentImagePath,
-    );
+    switch (options.conflictAction) {
+      case ConflictAction.overwrite:
+        return _ResolvedExportName(
+          imageFileName: desiredImageFileName,
+          rawFileName: options.includeRaw ? desiredRawFileName : null,
+          wasRenamed: false,
+        );
+      case ConflictAction.skip:
+        final imageExists = existingFileNames.contains(desiredImageFileName);
+        final rawExists = options.includeRaw &&
+            desiredRawFileName != null &&
+            existingFileNames.contains(desiredRawFileName);
+        return _ResolvedExportName(
+          imageFileName: imageExists ? null : desiredImageFileName,
+          rawFileName: rawExists || !options.includeRaw
+              ? null
+              : desiredRawFileName,
+          wasRenamed: false,
+          imageSkipped: imageExists,
+          rawSkipped: rawExists,
+        );
+      case ConflictAction.rename:
+        final imageBase = p.basenameWithoutExtension(desiredImageFileName);
+        final imageExtension = p.extension(desiredImageFileName).toLowerCase();
+        final rawExtension = desiredRawFileName == null
+            ? null
+            : p.extension(desiredRawFileName).toLowerCase();
+        var counter = 0;
+        while (true) {
+          final suffix = counter == 0 ? '' : '_$counter';
+          final candidateImageFileName = '$imageBase$suffix$imageExtension';
+          final candidateRawFileName = rawExtension == null || !options.includeRaw
+              ? null
+              : '$imageBase$suffix$rawExtension';
+          final imageConflict = existingFileNames.contains(candidateImageFileName);
+          final rawConflict = candidateRawFileName != null &&
+              existingFileNames.contains(candidateRawFileName);
+          if (!imageConflict && !rawConflict) {
+            return _ResolvedExportName(
+              imageFileName: candidateImageFileName,
+              rawFileName: candidateRawFileName,
+              wasRenamed: counter > 0,
+            );
+          }
+          counter++;
+        }
+    }
+  }
 
-    for (final ext in rawExtensions) {
-      final rawFilePath = p.join(
-        fileDirectory,
-        '$fileNameWithoutExtension$ext',
+  Future<void> _copyWithConflictAction({
+    required String sourcePath,
+    required String targetPath,
+    required ConflictAction action,
+  }) async {
+    final targetFile = File(targetPath);
+    if (action == ConflictAction.overwrite && await targetFile.exists()) {
+      await targetFile.delete();
+    }
+    await File(sourcePath).copy(targetPath);
+  }
+
+  Future<List<LocalImageEntry>> _scanDirectory(
+    String directoryPath, {
+    required bool recursive,
+  }) async {
+    final directory = Directory(directoryPath);
+    if (!await directory.exists()) {
+      return const [];
+    }
+
+    final imageFiles = <File>[];
+    final rawFilesByDirectory = <String, Map<String, String>>{};
+
+    await for (final entity in directory.list(
+      recursive: recursive,
+      followLinks: false,
+    )) {
+      if (entity is! File) {
+        continue;
+      }
+      final extension = p.extension(entity.path).toLowerCase();
+      if (_supportedImageExtensions.contains(extension)) {
+        imageFiles.add(entity);
+        continue;
+      }
+      if (_supportedRawExtensions.contains(extension)) {
+        rawFilesByDirectory
+            .putIfAbsent(p.dirname(entity.path), () => {})
+            .putIfAbsent(
+              p.basenameWithoutExtension(entity.path).toLowerCase(),
+              () => entity.path,
+            );
+      }
+    }
+
+    const concurrencyLimit = 20;
+    final entries = <LocalImageEntry>[];
+    for (var index = 0; index < imageFiles.length; index += concurrencyLimit) {
+      final chunk = imageFiles.sublist(
+        index,
+        (index + concurrencyLimit).clamp(0, imageFiles.length),
       );
-      if (await File(rawFilePath).exists()) {
-        _rawFileStatus[currentImagePath] = true;
-        notifyListeners();
+      final chunkEntries = await Future.wait(
+        chunk.map((file) async {
+          final rawPath = rawFilesByDirectory[p.dirname(file.path)]?[
+              p.basenameWithoutExtension(file.path).toLowerCase()];
+          return LocalImageEntry(
+            path: file.path,
+            fileName: p.basename(file.path),
+            directoryPath: p.dirname(file.path),
+            size: await file.length(),
+            lastModified: await file.lastModified(),
+            rawPath: rawPath,
+          );
+        }),
+      );
+      entries.addAll(chunkEntries);
+    }
+
+    return _sortEntries(entries);
+  }
+
+  List<LocalImageEntry> _sortEntries(List<LocalImageEntry> entries) {
+    final sorted = [...entries];
+    switch (_sortMode) {
+      case LocalPickerSortMode.nameAsc:
+        sorted.sort((a, b) => a.fileName.compareTo(b.fileName));
+        break;
+      case LocalPickerSortMode.nameDesc:
+        sorted.sort((a, b) => b.fileName.compareTo(a.fileName));
+        break;
+      case LocalPickerSortMode.modifiedNewest:
+        sorted.sort((a, b) => b.lastModified.compareTo(a.lastModified));
+        break;
+      case LocalPickerSortMode.modifiedOldest:
+        sorted.sort((a, b) => a.lastModified.compareTo(b.lastModified));
+        break;
+    }
+    return sorted;
+  }
+
+  void _rebuildVisibleEntries({required bool resetVisible}) {
+    final currentPath = currentImageEntry?.path;
+    final filtered = _sortEntries(_applyFilter(_allImageEntries));
+    _filteredImageEntries
+      ..clear()
+      ..addAll(filtered);
+
+    if (resetVisible || _visibleCount == 0) {
+      _visibleCount = _filteredImageEntries.length.clamp(0, _pageSize);
+    } else {
+      _visibleCount = _visibleCount.clamp(0, _filteredImageEntries.length);
+    }
+
+    if (_filteredImageEntries.isEmpty) {
+      _currentImageIndex = 0;
+      return;
+    }
+
+    if (currentPath != null) {
+      final newIndex = _filteredImageEntries.indexWhere(
+        (entry) => entry.path == currentPath,
+      );
+      if (newIndex != -1) {
+        _currentImageIndex = newIndex;
         return;
       }
     }
-    _rawFileStatus[currentImagePath] = false;
-    notifyListeners();
+    _currentImageIndex = _currentImageIndex.clamp(
+      0,
+      _filteredImageEntries.length - 1,
+    );
   }
 
-  Future<void> _calculateTotalImageCount() async {
-    if (_currentDirectory == null) return;
-    try {
-      final dir = Directory(_currentDirectory!);
-      final count = await dir.list().where((entity) {
-        if (entity is! File) return false;
-        final extension = p.extension(entity.path).toLowerCase();
-        return ['.jpg', '.jpeg', '.png', '.heic'].contains(extension);
-      }).length;
-      _totalImageCount = count;
-      notifyListeners();
-    } catch (e) {
-      debugPrint('Error calculating total image count: $e');
+  List<LocalImageEntry> _applyFilter(List<LocalImageEntry> entries) {
+    switch (_filterMode) {
+      case LocalPickerFilterMode.all:
+        return [...entries];
+      case LocalPickerFilterMode.selected:
+        return entries
+            .where((entry) => _selectedImagePaths.contains(entry.path))
+            .toList(growable: false);
+      case LocalPickerFilterMode.withRaw:
+        return entries
+            .where((entry) => entry.hasRaw)
+            .toList(growable: false);
     }
   }
 
   Map<String, dynamic> getCacheStats() {
-    final hitRate = (_cacheHitCount + _cacheMissCount) == 0
-        ? 0
-        : _cacheHitCount / (_cacheHitCount + _cacheMissCount);
+    final totalAccesses = _cacheHitCount + _cacheMissCount;
+    final hitRate = totalAccesses == 0 ? 0.0 : _cacheHitCount / totalAccesses;
     return {
       'hitCount': _cacheHitCount,
       'missCount': _cacheMissCount,
