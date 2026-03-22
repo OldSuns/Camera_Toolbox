@@ -18,6 +18,13 @@ class RenameScreen extends StatefulWidget {
 
 class _RenameScreenState extends State<RenameScreen>
     with SingleTickerProviderStateMixin {
+  static const double _bottomAreaSpacing = 16;
+  static const double _fileSelectionEmptyHeight = 176;
+  static const double _fileSelectionHeaderHeight = 56;
+  static const double _fileSelectionItemHeight = 72;
+  static const double _issueListHeaderHeight = 56;
+  static const double _issueListItemHeight = 52;
+
   late TabController _tabController;
 
   @override
@@ -45,44 +52,51 @@ class _RenameScreenState extends State<RenameScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          TabBar(
-            controller: _tabController,
-            tabs: const [
-              Tab(text: '替换'),
-              Tab(text: '追加'),
-              Tab(text: '自动序号'),
-              Tab(text: 'EXIF命名'),
-            ],
-          ),
-          Expanded(
-            child: TabBarView(
-              controller: _tabController,
-              children: const [
-                ReplaceRenameView(),
-                AppendRenameView(),
-                AutoNumberingView(),
-                ExifRenameView(),
-              ],
-            ),
-          ),
-          Consumer<RenameProvider>(
-            builder: (context, provider, _) {
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 16),
-                child: Column(
-                  children: [
-                    _buildFileInfoAndActions(provider),
-                    const SizedBox(height: 16),
-                    _buildFileAndIssueArea(provider),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TabBar(
+                controller: _tabController,
+                tabs: const [
+                  Tab(text: '替换'),
+                  Tab(text: '追加'),
+                  Tab(text: '自动序号'),
+                  Tab(text: 'EXIF命名'),
+                ],
+              ),
+              Expanded(
+                child: TabBarView(
+                  controller: _tabController,
+                  children: const [
+                    ReplaceRenameView(),
+                    AppendRenameView(),
+                    AutoNumberingView(),
+                    ExifRenameView(),
                   ],
                 ),
-              );
-            },
-          ),
-        ],
+              ),
+              Consumer<RenameProvider>(
+                builder: (context, provider, _) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 16),
+                    child: Column(
+                      children: [
+                        _buildFileInfoAndActions(provider),
+                        const SizedBox(height: _bottomAreaSpacing),
+                        _buildFileAndIssueArea(
+                          provider,
+                          availableHeight: constraints.maxHeight,
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -108,313 +122,272 @@ class _RenameScreenState extends State<RenameScreen>
     );
   }
 
-  Widget _buildFileAndIssueArea(RenameProvider provider) {
+  Widget _buildFileAndIssueArea(
+    RenameProvider provider, {
+    required double availableHeight,
+  }) {
+    final fileSelectionHeight = _calculateFileSelectionHeight(
+      availableHeight,
+      provider,
+    );
+    final issueListHeight = provider.issues.isEmpty
+        ? null
+        : _calculateIssueListHeight(availableHeight, provider.issues.length);
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Column(
         children: [
-          _buildFileSelectionArea(provider),
+          _buildFileSelectionArea(
+            provider,
+            targetHeight: fileSelectionHeight,
+            maxHeight: _calculateFileSelectionMaxHeight(
+              availableHeight,
+              hasIssues: provider.issues.isNotEmpty,
+            ),
+          ),
           if (provider.issues.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            _buildIssueList(provider),
+            const SizedBox(height: _bottomAreaSpacing),
+            _buildIssueList(
+              provider,
+              targetHeight: issueListHeight!,
+              maxHeight: _calculateIssueListMaxHeight(availableHeight),
+            ),
           ],
         ],
       ),
     );
   }
 
-  Widget _buildFileSelectionArea(RenameProvider provider) {
-    return Card(
-      child: Container(
-        height: 320,
-        decoration: BoxDecoration(
-          border: Border.all(color: Colors.grey),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: provider.files.isEmpty
-            ? DropTarget(
-                onDragDone: _handleDrop,
-                child: Center(
-                  child: Column(
+  Widget _buildFileSelectionArea(
+    RenameProvider provider, {
+    required double targetHeight,
+    required double maxHeight,
+  }) {
+    final fileSelectionBody = provider.files.isEmpty
+        ? DropTarget(
+            onDragDone: _handleDrop,
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.upload_file, size: 48, color: Colors.grey),
+                  const SizedBox(height: 8),
+                  const Text(
+                    '拖放文件到此处或点击选择文件',
+                    style: TextStyle(fontSize: 16, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const Icon(
-                        Icons.upload_file,
-                        size: 48,
-                        color: Colors.grey,
+                      TextButton(
+                        onPressed: () async {
+                          final duplicateCount = await provider.selectFiles();
+                          _showDuplicateFilesSnackBar(duplicateCount);
+                        },
+                        child: const Text('选择文件'),
                       ),
-                      const SizedBox(height: 8),
-                      const Text(
-                        '拖放文件到此处或点击选择文件',
-                        style: TextStyle(fontSize: 16, color: Colors.grey),
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          TextButton(
-                            onPressed: () async {
-                              final duplicateCount = await provider
-                                  .selectFiles();
-                              _showDuplicateFilesSnackBar(duplicateCount);
-                            },
-                            child: const Text('选择文件'),
-                          ),
-                          const SizedBox(width: 8),
-                          TextButton(
-                            onPressed: () async {
-                              final duplicateCount = await provider
-                                  .selectFolder();
-                              if (duplicateCount == -1) {
-                                _showPermissionDeniedSnackBar();
-                              } else {
-                                _showDuplicateFilesSnackBar(duplicateCount);
-                              }
-                            },
-                            child: const Text('选择文件夹'),
-                          ),
-                        ],
+                      const SizedBox(width: 8),
+                      TextButton(
+                        onPressed: () async {
+                          final duplicateCount = await provider.selectFolder();
+                          if (duplicateCount == -1) {
+                            _showPermissionDeniedSnackBar();
+                          } else {
+                            _showDuplicateFilesSnackBar(duplicateCount);
+                          }
+                        },
+                        child: const Text('选择文件夹'),
                       ),
                     ],
                   ),
-                ),
-              )
-            : Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.all(8),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        TextButton(
-                          onPressed: () async {
-                            final duplicateCount = await provider.selectFiles();
-                            _showDuplicateFilesSnackBar(duplicateCount);
-                          },
-                          child: const Text('添加文件'),
-                        ),
-                        const SizedBox(width: 8),
-                        TextButton(
-                          onPressed: () async {
-                            final duplicateCount = await provider
-                                .selectFolder();
-                            if (duplicateCount == -1) {
-                              _showPermissionDeniedSnackBar();
-                            } else {
-                              _showDuplicateFilesSnackBar(duplicateCount);
-                            }
-                          },
-                          child: const Text('添加文件夹'),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Expanded(
-                    child: DropTarget(
-                      onDragDone: _handleDrop,
-                      child: ReorderableListView.builder(
-                        padding: const EdgeInsets.all(8),
-                        itemCount: provider.files.length,
-                        itemBuilder: (context, index) {
-                          final fileDetail = provider.files[index];
-                          final previewItem = provider.previewItemAt(index);
-                          return ListTile(
-                            key: ValueKey(fileDetail.file.path),
-                            title: Text(fileDetail.fileName),
-                            subtitle: _buildPreviewSubtitle(
-                              context,
-                              previewItem,
-                              fileDetail,
-                            ),
-                            trailing: SizedBox(
-                              width: 126,
-                              child: Wrap(
-                                alignment: WrapAlignment.end,
-                                spacing: 4,
-                                runSpacing: 4,
-                                children: [
-                                  Text(
-                                    DateFormat(
-                                      'yyyy-MM-dd HH:mm',
-                                    ).format(fileDetail.lastModified.toLocal()),
-                                    style: const TextStyle(fontSize: 12),
-                                  ),
-                                  Text(
-                                    '${(fileDetail.size / 1024 / 1024).toStringAsFixed(1)} MB',
-                                    style: const TextStyle(fontSize: 12),
-                                  ),
-                                  IconButton(
-                                    padding: const EdgeInsets.only(
-                                      left: 5,
-                                      right: 10,
-                                    ),
-                                    constraints: const BoxConstraints(),
-                                    icon: const Icon(
-                                      Icons.delete,
-                                      color: Colors.grey,
-                                      size: 24,
-                                    ),
-                                    onPressed: () => provider.removeFile(index),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          );
-                        },
-                        onReorder: (oldIndex, newIndex) {
-                          if (newIndex > oldIndex) {
-                            newIndex -= 1;
-                          }
-                          provider.reorderFiles(oldIndex, newIndex);
-                        },
-                      ),
-                    ),
-                  ),
                 ],
               ),
-      ),
-    );
-  }
-
-  Widget _buildPreviewSubtitle(
-    BuildContext context,
-    RenamePlanItem? item,
-    FileDetail fileDetail,
-  ) {
-    final theme = Theme.of(context);
-    if (item == null) {
-      return Text(fileDetail.fileName);
-    }
-
-    final statusColor = switch (item.status) {
-      RenamePreviewStatus.normal => theme.colorScheme.primary,
-      RenamePreviewStatus.unchanged => theme.colorScheme.onSurfaceVariant,
-      RenamePreviewStatus.warning => Colors.orange.shade700,
-      RenamePreviewStatus.conflict => theme.colorScheme.error,
-    };
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          item.targetName,
-          style: TextStyle(
-            color: statusColor,
-            fontWeight: item.status == RenamePreviewStatus.conflict
-                ? FontWeight.w600
-                : FontWeight.normal,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Wrap(
-          spacing: 6,
-          runSpacing: 4,
-          children: [
-            _buildStatusChip(context, item.status),
-            _buildActionChip(context, item.action),
-            if (item.caseOnlyRename) _buildInfoChip(context, '仅大小写变化'),
-          ],
-        ),
-        if (item.issues.isNotEmpty) ...[
-          const SizedBox(height: 4),
-          Text(
-            item.primaryMessage,
-            style: TextStyle(fontSize: 12, color: statusColor),
-          ),
-        ],
-      ],
-    );
-  }
-
-  Widget _buildStatusChip(BuildContext context, RenamePreviewStatus status) {
-    final theme = Theme.of(context);
-    final color = switch (status) {
-      RenamePreviewStatus.normal => theme.colorScheme.primaryContainer,
-      RenamePreviewStatus.unchanged =>
-        theme.colorScheme.surfaceContainerHighest,
-      RenamePreviewStatus.warning => Colors.orange.shade100,
-      RenamePreviewStatus.conflict => theme.colorScheme.errorContainer,
-    };
-    final textColor = switch (status) {
-      RenamePreviewStatus.normal => theme.colorScheme.onPrimaryContainer,
-      RenamePreviewStatus.unchanged => theme.colorScheme.onSurfaceVariant,
-      RenamePreviewStatus.warning => Colors.orange.shade900,
-      RenamePreviewStatus.conflict => theme.colorScheme.onErrorContainer,
-    };
-    return Chip(
-      label: Text(
-        status.label,
-        style: TextStyle(fontSize: 11, color: textColor),
-      ),
-      backgroundColor: color,
-      visualDensity: VisualDensity.compact,
-      padding: EdgeInsets.zero,
-    );
-  }
-
-  Widget _buildActionChip(BuildContext context, RenamePlanAction action) {
-    return Chip(
-      label: Text(action.label, style: const TextStyle(fontSize: 11)),
-      visualDensity: VisualDensity.compact,
-      padding: EdgeInsets.zero,
-    );
-  }
-
-  Widget _buildInfoChip(BuildContext context, String label) {
-    return Chip(
-      label: Text(label, style: const TextStyle(fontSize: 11)),
-      visualDensity: VisualDensity.compact,
-      padding: EdgeInsets.zero,
-    );
-  }
-
-  Widget _buildIssueList(RenameProvider provider) {
-    return Card(
-      color: Theme.of(context).colorScheme.surfaceContainerHighest,
-      child: Container(
-        height: 180,
-        padding: const EdgeInsets.all(8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '处理日志 (${provider.issues.length} 条)',
-              style: const TextStyle(fontWeight: FontWeight.bold),
             ),
-            const Divider(),
-            Expanded(
-              child: ListView.builder(
-                itemCount: provider.issues.length,
-                itemBuilder: (context, index) {
-                  final issue = provider.issues[index];
-                  final icon = switch (issue.severity) {
-                    RenameIssueSeverity.info => Icons.info_outline,
-                    RenameIssueSeverity.warning => Icons.warning_amber_rounded,
-                    RenameIssueSeverity.error => Icons.error_outline,
-                  };
-                  final color = switch (issue.severity) {
-                    RenameIssueSeverity.info => Theme.of(
-                      context,
-                    ).colorScheme.primary,
-                    RenameIssueSeverity.warning => Colors.orange.shade700,
-                    RenameIssueSeverity.error => Theme.of(
-                      context,
-                    ).colorScheme.error,
-                  };
-                  return ListTile(
-                    dense: true,
-                    leading: Icon(icon, color: color),
-                    title: Text(issue.fileName ?? issue.code),
-                    subtitle: Text(_formatIssueSubtitle(issue)),
-                  );
-                },
+          )
+        : Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(8),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    TextButton(
+                      onPressed: () async {
+                        final duplicateCount = await provider.selectFiles();
+                        _showDuplicateFilesSnackBar(duplicateCount);
+                      },
+                      child: const Text('添加文件'),
+                    ),
+                    const SizedBox(width: 8),
+                    TextButton(
+                      onPressed: () async {
+                        final duplicateCount = await provider.selectFolder();
+                        if (duplicateCount == -1) {
+                          _showPermissionDeniedSnackBar();
+                        } else {
+                          _showDuplicateFilesSnackBar(duplicateCount);
+                        }
+                      },
+                      child: const Text('添加文件夹'),
+                    ),
+                  ],
+                ),
               ),
+              Expanded(
+                child: DropTarget(
+                  onDragDone: _handleDrop,
+                  child: ReorderableListView.builder(
+                    buildDefaultDragHandles: false,
+                    padding: const EdgeInsets.all(8),
+                    shrinkWrap: true,
+                    physics: const ClampingScrollPhysics(),
+                    itemCount: provider.files.length,
+                    itemBuilder: (context, index) {
+                      final fileDetail = provider.files[index];
+                      final previewItem = provider.previewItemAt(index);
+                      return _RenamePreviewListItem(
+                        key: ValueKey(fileDetail.file.path),
+                        index: index,
+                        fileDetail: fileDetail,
+                        previewItem: previewItem,
+                        onRemove: () => provider.removeFile(index),
+                      );
+                    },
+                    onReorder: (oldIndex, newIndex) {
+                      if (newIndex > oldIndex) {
+                        newIndex -= 1;
+                      }
+                      provider.reorderFiles(oldIndex, newIndex);
+                    },
+                  ),
+                ),
+              ),
+            ],
+          );
+
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        minHeight: targetHeight,
+        maxHeight: maxHeight,
+      ),
+      child: SizedBox(
+        height: targetHeight,
+        child: Card(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.grey),
+              borderRadius: BorderRadius.circular(8),
             ),
-          ],
+            child: fileSelectionBody,
+          ),
         ),
       ),
     );
+  }
+
+  Widget _buildIssueList(
+    RenameProvider provider, {
+    required double targetHeight,
+    required double maxHeight,
+  }) {
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        minHeight: targetHeight,
+        maxHeight: maxHeight,
+      ),
+      child: SizedBox(
+        height: targetHeight,
+        child: Card(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '处理日志 (${provider.issues.length} 条)',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const Divider(),
+                Expanded(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    physics: const ClampingScrollPhysics(),
+                    itemCount: provider.issues.length,
+                    itemBuilder: (context, index) {
+                      final issue = provider.issues[index];
+                      final icon = switch (issue.severity) {
+                        RenameIssueSeverity.info => Icons.info_outline,
+                        RenameIssueSeverity.warning =>
+                          Icons.warning_amber_rounded,
+                        RenameIssueSeverity.error => Icons.error_outline,
+                      };
+                      final color = switch (issue.severity) {
+                        RenameIssueSeverity.info => Theme.of(
+                          context,
+                        ).colorScheme.primary,
+                        RenameIssueSeverity.warning => Colors.orange.shade700,
+                        RenameIssueSeverity.error => Theme.of(
+                          context,
+                        ).colorScheme.error,
+                      };
+                      return ListTile(
+                        dense: true,
+                        leading: Icon(icon, color: color),
+                        title: Text(issue.fileName ?? issue.code),
+                        subtitle: Text(_formatIssueSubtitle(issue)),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  double _calculateFileSelectionMaxHeight(
+    double availableHeight, {
+    required bool hasIssues,
+  }) {
+    final rawMaxHeight = hasIssues
+        ? availableHeight * 0.24
+        : availableHeight * 0.34;
+    final minMaxHeight = hasIssues ? 160.0 : 180.0;
+    final maxMaxHeight = hasIssues ? 260.0 : 300.0;
+    return rawMaxHeight.clamp(minMaxHeight, maxMaxHeight).toDouble();
+  }
+
+  double _calculateFileSelectionHeight(
+    double availableHeight,
+    RenameProvider provider,
+  ) {
+    final maxHeight = _calculateFileSelectionMaxHeight(
+      availableHeight,
+      hasIssues: provider.issues.isNotEmpty,
+    );
+    final estimatedContentHeight = provider.files.isEmpty
+        ? _fileSelectionEmptyHeight
+        : _fileSelectionHeaderHeight +
+              (_fileSelectionItemHeight * provider.files.length.clamp(1, 3)) +
+              16;
+    return estimatedContentHeight.clamp(0.0, maxHeight).toDouble();
+  }
+
+  double _calculateIssueListMaxHeight(double availableHeight) {
+    return (availableHeight * 0.18).clamp(96.0, 160.0).toDouble();
+  }
+
+  double _calculateIssueListHeight(double availableHeight, int issueCount) {
+    final maxHeight = _calculateIssueListMaxHeight(availableHeight);
+    final estimatedContentHeight =
+        _issueListHeaderHeight +
+        (_issueListItemHeight * issueCount.clamp(1, 2));
+    return estimatedContentHeight.clamp(96.0, maxHeight).toDouble();
   }
 
   String _formatIssueSubtitle(RenameIssue issue) {
@@ -737,5 +710,272 @@ class _RenameScreenState extends State<RenameScreen>
         duration: Duration(seconds: 3),
       ),
     );
+  }
+}
+
+class _RenamePreviewListItem extends StatelessWidget {
+  const _RenamePreviewListItem({
+    super.key,
+    required this.index,
+    required this.fileDetail,
+    required this.previewItem,
+    required this.onRemove,
+  });
+
+  final int index;
+  final FileDetail fileDetail;
+  final RenamePlanItem? previewItem;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final primaryStatus = _resolvePrimaryStatus(previewItem);
+    final statusColor = _statusColor(context, primaryStatus);
+    final targetName = previewItem?.targetName ?? fileDetail.fileName;
+    final tooltipMessage = _buildTooltipMessage(previewItem);
+
+    return Container(
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(
+            color: theme.colorScheme.outlineVariant.withAlpha(90),
+          ),
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 60,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: _RenameStatusBadge(
+                  status: primaryStatus,
+                  tooltipMessage: tooltipMessage,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    fileDetail.fileName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodyMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    targetName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: statusColor,
+                      fontWeight: primaryStatus == RenamePreviewStatus.conflict
+                          ? FontWeight.w600
+                          : FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 156,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: Tooltip(
+                      message: _buildMetaTooltip(fileDetail),
+                      child: Text(
+                        _buildMetaText(fileDetail),
+                        maxLines: 1,
+                        textAlign: TextAlign.right,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  IconButton(
+                    padding: EdgeInsets.zero,
+                    visualDensity: VisualDensity.compact,
+                    constraints: const BoxConstraints.tightFor(
+                      width: 28,
+                      height: 28,
+                    ),
+                    icon: Icon(
+                      Icons.delete_outline,
+                      color: theme.colorScheme.onSurfaceVariant,
+                      size: 20,
+                    ),
+                    onPressed: onRemove,
+                    tooltip: '删除',
+                  ),
+                  const SizedBox(width: 4),
+                  ReorderableDragStartListener(
+                    index: index,
+                    child: Tooltip(
+                      message: '拖动排序',
+                      child: SizedBox(
+                        width: 28,
+                        height: 28,
+                        child: Center(
+                          child: Icon(
+                            Icons.drag_indicator,
+                            color: theme.colorScheme.onSurfaceVariant,
+                            size: 20,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  RenamePreviewStatus _resolvePrimaryStatus(RenamePlanItem? item) {
+    if (item == null) {
+      return RenamePreviewStatus.normal;
+    }
+
+    if (item.status == RenamePreviewStatus.conflict || item.hasErrors) {
+      return RenamePreviewStatus.conflict;
+    }
+    if (item.status == RenamePreviewStatus.warning || item.hasWarnings) {
+      return RenamePreviewStatus.warning;
+    }
+    if (item.status == RenamePreviewStatus.unchanged ||
+        item.action == RenamePlanAction.unchanged) {
+      return RenamePreviewStatus.unchanged;
+    }
+    return RenamePreviewStatus.normal;
+  }
+
+  Color _statusColor(BuildContext context, RenamePreviewStatus status) {
+    final theme = Theme.of(context);
+    return switch (status) {
+      RenamePreviewStatus.normal => theme.colorScheme.primary,
+      RenamePreviewStatus.unchanged => theme.colorScheme.onSurfaceVariant,
+      RenamePreviewStatus.warning => Colors.orange.shade700,
+      RenamePreviewStatus.conflict => theme.colorScheme.error,
+    };
+  }
+
+  String _buildMetaText(FileDetail fileDetail) {
+    final dateText = DateFormat(
+      'MM-dd',
+    ).format(fileDetail.lastModified.toLocal());
+    return '$dateText · ${_formatCompactFileSize(fileDetail.size)}';
+  }
+
+  String _buildMetaTooltip(FileDetail fileDetail) {
+    final timeText = DateFormat(
+      'yyyy-MM-dd HH:mm',
+    ).format(fileDetail.lastModified.toLocal());
+    final sizeText = '${(fileDetail.size / 1024 / 1024).toStringAsFixed(1)} MB';
+    return '$timeText · $sizeText';
+  }
+
+  String? _buildTooltipMessage(RenamePlanItem? item) {
+    if (item == null) {
+      return '预览生成中';
+    }
+
+    final parts = <String>[];
+    if (item.primaryMessage.isNotEmpty) {
+      parts.add(item.primaryMessage);
+    }
+    if (item.caseOnlyRename) {
+      parts.add('仅大小写变化');
+    }
+    return parts.isEmpty ? null : parts.join('\n');
+  }
+
+  String _formatCompactFileSize(int bytes) {
+    final megaBytes = bytes / (1024 * 1024);
+    if (megaBytes >= 1024) {
+      return '${(megaBytes / 1024).toStringAsFixed(1)}G';
+    }
+    if (megaBytes >= 1) {
+      return '${megaBytes.toStringAsFixed(1)}M';
+    }
+    final kiloBytes = bytes / 1024;
+    return '${kiloBytes.toStringAsFixed(0)}K';
+  }
+}
+
+class _RenameStatusBadge extends StatelessWidget {
+  const _RenameStatusBadge({
+    required this.status,
+    required this.tooltipMessage,
+  });
+
+  final RenamePreviewStatus status;
+  final String? tooltipMessage;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final backgroundColor = switch (status) {
+      RenamePreviewStatus.normal => theme.colorScheme.primaryContainer,
+      RenamePreviewStatus.unchanged =>
+        theme.colorScheme.surfaceContainerHighest,
+      RenamePreviewStatus.warning => Colors.orange.shade100,
+      RenamePreviewStatus.conflict => theme.colorScheme.errorContainer,
+    };
+    final textColor = switch (status) {
+      RenamePreviewStatus.normal => theme.colorScheme.onPrimaryContainer,
+      RenamePreviewStatus.unchanged => theme.colorScheme.onSurfaceVariant,
+      RenamePreviewStatus.warning => Colors.orange.shade900,
+      RenamePreviewStatus.conflict => theme.colorScheme.onErrorContainer,
+    };
+
+    final badge = Container(
+      constraints: const BoxConstraints(minWidth: 52),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        _badgeLabel(status),
+        maxLines: 1,
+        softWrap: false,
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: textColor,
+          fontWeight: FontWeight.w600,
+        ),
+        textAlign: TextAlign.center,
+      ),
+    );
+
+    if (tooltipMessage == null || tooltipMessage!.isEmpty) {
+      return badge;
+    }
+
+    return Tooltip(message: tooltipMessage, child: badge);
+  }
+
+  String _badgeLabel(RenamePreviewStatus status) {
+    return switch (status) {
+      RenamePreviewStatus.normal => '正常',
+      RenamePreviewStatus.unchanged => '未变',
+      RenamePreviewStatus.warning => '警告',
+      RenamePreviewStatus.conflict => '冲突',
+    };
   }
 }
