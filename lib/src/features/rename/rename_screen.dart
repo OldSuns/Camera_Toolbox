@@ -1,15 +1,14 @@
-import 'dart:io';
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
-import 'package:desktop_drop/desktop_drop.dart';
+
 import 'rename_provider.dart';
-import 'widgets/replace_rename_view.dart';
 import 'widgets/append_rename_view.dart';
 import 'widgets/auto_numbering_view.dart';
 import 'widgets/exif_rename_view.dart';
+import 'widgets/replace_rename_view.dart';
 
-/// 批量重命名页面 - 提供多种策略批量修改文件名
 class RenameScreen extends StatefulWidget {
   const RenameScreen({super.key});
 
@@ -24,10 +23,14 @@ class _RenameScreenState extends State<RenameScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    final initialIndex = context.read<RenameProvider>().activeTabIndex;
+    _tabController = TabController(
+      length: 4,
+      vsync: this,
+      initialIndex: initialIndex,
+    );
     _tabController.addListener(() {
       if (_tabController.indexIsChanging) {
-        // 当标签切换时，更新Provider中的状态
         context.read<RenameProvider>().setActiveTabIndex(_tabController.index);
       }
     });
@@ -65,16 +68,15 @@ class _RenameScreenState extends State<RenameScreen>
               ],
             ),
           ),
-          // Consumer只包裹需要它的部分
           Consumer<RenameProvider>(
-            builder: (context, renameProvider, child) {
+            builder: (context, provider, _) {
               return Padding(
-                padding: const EdgeInsets.only(bottom: 16.0),
+                padding: const EdgeInsets.only(bottom: 16),
                 child: Column(
                   children: [
-                    _buildFileInfoAndActions(renameProvider),
+                    _buildFileInfoAndActions(provider),
                     const SizedBox(height: 16),
-                    _buildFileAndErrorArea(renameProvider),
+                    _buildFileAndIssueArea(provider),
                   ],
                 ),
               );
@@ -85,7 +87,6 @@ class _RenameScreenState extends State<RenameScreen>
     );
   }
 
-  /// 显示重复文件提示
   void _showDuplicateFilesSnackBar(int duplicateCount) {
     if (duplicateCount > 0 && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -97,43 +98,40 @@ class _RenameScreenState extends State<RenameScreen>
     }
   }
 
-  /// 处理文件拖放
   Future<void> _handleDrop(DropDoneDetails details) async {
-    final renameProvider = context.read<RenameProvider>();
-    final beforeCount = renameProvider.files.length;
-    await renameProvider.addFiles(details.files);
-    final afterCount = renameProvider.files.length;
-    final addedCount = afterCount - beforeCount;
-    final duplicateCount = details.files.length - addedCount;
-    _showDuplicateFilesSnackBar(duplicateCount);
+    final provider = context.read<RenameProvider>();
+    final beforeCount = provider.files.length;
+    await provider.addFiles(details.files);
+    final afterCount = provider.files.length;
+    _showDuplicateFilesSnackBar(
+      details.files.length - (afterCount - beforeCount),
+    );
   }
 
-  /// 构建文件列表和错误日志区域
-  Widget _buildFileAndErrorArea(RenameProvider renameProvider) {
+  Widget _buildFileAndIssueArea(RenameProvider provider) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+      padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Column(
         children: [
-          _buildFileSelectionArea(renameProvider),
-          if (renameProvider.errors.isNotEmpty) ...[
+          _buildFileSelectionArea(provider),
+          if (provider.issues.isNotEmpty) ...[
             const SizedBox(height: 16),
-            _buildErrorList(renameProvider),
+            _buildIssueList(provider),
           ],
         ],
       ),
     );
   }
 
-  /// 构建文件选择区域
-  Widget _buildFileSelectionArea(RenameProvider renameProvider) {
+  Widget _buildFileSelectionArea(RenameProvider provider) {
     return Card(
       child: Container(
-        height: 300, // Fixed height for the file list
+        height: 320,
         decoration: BoxDecoration(
           border: Border.all(color: Colors.grey),
           borderRadius: BorderRadius.circular(8),
         ),
-        child: renameProvider.files.isEmpty
+        child: provider.files.isEmpty
             ? DropTarget(
                 onDragDone: _handleDrop,
                 child: Center(
@@ -156,7 +154,7 @@ class _RenameScreenState extends State<RenameScreen>
                         children: [
                           TextButton(
                             onPressed: () async {
-                              final duplicateCount = await renameProvider
+                              final duplicateCount = await provider
                                   .selectFiles();
                               _showDuplicateFilesSnackBar(duplicateCount);
                             },
@@ -165,20 +163,10 @@ class _RenameScreenState extends State<RenameScreen>
                           const SizedBox(width: 8),
                           TextButton(
                             onPressed: () async {
-                              final duplicateCount = await renameProvider
+                              final duplicateCount = await provider
                                   .selectFolder();
                               if (duplicateCount == -1) {
-                                // 权限被拒绝
-                                if (mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text(
-                                        '存储权限被拒绝，无法访问文件夹中的文件。请在设置中授予存储权限后重试。',
-                                      ),
-                                      duration: Duration(seconds: 3),
-                                    ),
-                                  );
-                                }
+                                _showPermissionDeniedSnackBar();
                               } else {
                                 _showDuplicateFilesSnackBar(duplicateCount);
                               }
@@ -193,16 +181,14 @@ class _RenameScreenState extends State<RenameScreen>
               )
             : Column(
                 children: [
-                  // 添加文件按钮
                   Padding(
-                    padding: const EdgeInsets.all(8.0),
+                    padding: const EdgeInsets.all(8),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         TextButton(
                           onPressed: () async {
-                            final duplicateCount = await renameProvider
-                                .selectFiles();
+                            final duplicateCount = await provider.selectFiles();
                             _showDuplicateFilesSnackBar(duplicateCount);
                           },
                           child: const Text('添加文件'),
@@ -210,20 +196,10 @@ class _RenameScreenState extends State<RenameScreen>
                         const SizedBox(width: 8),
                         TextButton(
                           onPressed: () async {
-                            final duplicateCount = await renameProvider
+                            final duplicateCount = await provider
                                 .selectFolder();
                             if (duplicateCount == -1) {
-                              // 权限被拒绝
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text(
-                                      '存储权限被拒绝，无法访问文件夹中的文件。请在设置中授予存储权限后重试。',
-                                    ),
-                                    duration: Duration(seconds: 3),
-                                  ),
-                                );
-                              }
+                              _showPermissionDeniedSnackBar();
                             } else {
                               _showDuplicateFilesSnackBar(duplicateCount);
                             }
@@ -233,33 +209,29 @@ class _RenameScreenState extends State<RenameScreen>
                       ],
                     ),
                   ),
-                  // 文件列表
                   Expanded(
                     child: DropTarget(
                       onDragDone: _handleDrop,
                       child: ReorderableListView.builder(
                         padding: const EdgeInsets.all(8),
-                        itemCount: renameProvider.files.length,
+                        itemCount: provider.files.length,
                         itemBuilder: (context, index) {
-                          final fileDetail = renameProvider.files[index];
-                          final file = fileDetail.file;
+                          final fileDetail = provider.files[index];
+                          final previewItem = provider.previewItemAt(index);
                           return ListTile(
-                            key: ValueKey(
-                              file.path,
-                            ), // ReorderableListView需要唯一的key
-                            title: Text(
-                              file.path.split(Platform.pathSeparator).last,
-                            ),
-                            subtitle: Text(
-                              renameProvider.previewRename(fileDetail, index),
+                            key: ValueKey(fileDetail.file.path),
+                            title: Text(fileDetail.fileName),
+                            subtitle: _buildPreviewSubtitle(
+                              context,
+                              previewItem,
+                              fileDetail,
                             ),
                             trailing: SizedBox(
-                              width: 120, // 保持宽度
+                              width: 126,
                               child: Wrap(
                                 alignment: WrapAlignment.end,
-                                spacing: 4.0,
-                                runSpacing: 4.0,
-                                crossAxisAlignment: WrapCrossAlignment.center,
+                                spacing: 4,
+                                runSpacing: 4,
                                 children: [
                                   Text(
                                     DateFormat(
@@ -273,18 +245,16 @@ class _RenameScreenState extends State<RenameScreen>
                                   ),
                                   IconButton(
                                     padding: const EdgeInsets.only(
-                                      left: 5.0,
-                                      right: 10.0,
-                                    ), // 删除按钮左右间距
+                                      left: 5,
+                                      right: 10,
+                                    ),
                                     constraints: const BoxConstraints(),
                                     icon: const Icon(
                                       Icons.delete,
-                                      color: Colors.grey, // 保持灰色
-                                      size: 24, // 删除按钮图标大小
+                                      color: Colors.grey,
+                                      size: 24,
                                     ),
-                                    onPressed: () {
-                                      renameProvider.removeFile(index);
-                                    },
+                                    onPressed: () => provider.removeFile(index),
                                   ),
                                 ],
                               ),
@@ -292,11 +262,10 @@ class _RenameScreenState extends State<RenameScreen>
                           );
                         },
                         onReorder: (oldIndex, newIndex) {
-                          // 处理索引调整，因为ReorderableListView的newIndex可能需要调整
                           if (newIndex > oldIndex) {
                             newIndex -= 1;
                           }
-                          renameProvider.reorderFiles(oldIndex, newIndex);
+                          provider.reorderFiles(oldIndex, newIndex);
                         },
                       ),
                     ),
@@ -307,51 +276,137 @@ class _RenameScreenState extends State<RenameScreen>
     );
   }
 
-  /// 构建错误日志列表
-  Widget _buildErrorList(RenameProvider renameProvider) {
+  Widget _buildPreviewSubtitle(
+    BuildContext context,
+    RenamePlanItem? item,
+    FileDetail fileDetail,
+  ) {
+    final theme = Theme.of(context);
+    if (item == null) {
+      return Text(fileDetail.fileName);
+    }
+
+    final statusColor = switch (item.status) {
+      RenamePreviewStatus.normal => theme.colorScheme.primary,
+      RenamePreviewStatus.unchanged => theme.colorScheme.onSurfaceVariant,
+      RenamePreviewStatus.warning => Colors.orange.shade700,
+      RenamePreviewStatus.conflict => theme.colorScheme.error,
+    };
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          item.targetName,
+          style: TextStyle(
+            color: statusColor,
+            fontWeight: item.status == RenamePreviewStatus.conflict
+                ? FontWeight.w600
+                : FontWeight.normal,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Wrap(
+          spacing: 6,
+          runSpacing: 4,
+          children: [
+            _buildStatusChip(context, item.status),
+            _buildActionChip(context, item.action),
+            if (item.caseOnlyRename) _buildInfoChip(context, '仅大小写变化'),
+          ],
+        ),
+        if (item.issues.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text(
+            item.primaryMessage,
+            style: TextStyle(fontSize: 12, color: statusColor),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildStatusChip(BuildContext context, RenamePreviewStatus status) {
+    final theme = Theme.of(context);
+    final color = switch (status) {
+      RenamePreviewStatus.normal => theme.colorScheme.primaryContainer,
+      RenamePreviewStatus.unchanged =>
+        theme.colorScheme.surfaceContainerHighest,
+      RenamePreviewStatus.warning => Colors.orange.shade100,
+      RenamePreviewStatus.conflict => theme.colorScheme.errorContainer,
+    };
+    final textColor = switch (status) {
+      RenamePreviewStatus.normal => theme.colorScheme.onPrimaryContainer,
+      RenamePreviewStatus.unchanged => theme.colorScheme.onSurfaceVariant,
+      RenamePreviewStatus.warning => Colors.orange.shade900,
+      RenamePreviewStatus.conflict => theme.colorScheme.onErrorContainer,
+    };
+    return Chip(
+      label: Text(
+        status.label,
+        style: TextStyle(fontSize: 11, color: textColor),
+      ),
+      backgroundColor: color,
+      visualDensity: VisualDensity.compact,
+      padding: EdgeInsets.zero,
+    );
+  }
+
+  Widget _buildActionChip(BuildContext context, RenamePlanAction action) {
+    return Chip(
+      label: Text(action.label, style: const TextStyle(fontSize: 11)),
+      visualDensity: VisualDensity.compact,
+      padding: EdgeInsets.zero,
+    );
+  }
+
+  Widget _buildInfoChip(BuildContext context, String label) {
+    return Chip(
+      label: Text(label, style: const TextStyle(fontSize: 11)),
+      visualDensity: VisualDensity.compact,
+      padding: EdgeInsets.zero,
+    );
+  }
+
+  Widget _buildIssueList(RenameProvider provider) {
     return Card(
-      color: Theme.of(context).colorScheme.errorContainer,
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
       child: Container(
-        height: 150, // Fixed height for the error list
-        padding: const EdgeInsets.all(8.0),
+        height: 180,
+        padding: const EdgeInsets.all(8),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '处理日志 (${renameProvider.errors.length} 条)',
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: Theme.of(context).colorScheme.onErrorContainer,
-              ),
+              '处理日志 (${provider.issues.length} 条)',
+              style: const TextStyle(fontWeight: FontWeight.bold),
             ),
             const Divider(),
             Expanded(
               child: ListView.builder(
-                itemCount: renameProvider.errors.length,
+                itemCount: provider.issues.length,
                 itemBuilder: (context, index) {
-                  final error = renameProvider.errors[index];
-                  final fileName =
-                      error.filePath?.split(Platform.pathSeparator).last ??
-                      'N/A';
+                  final issue = provider.issues[index];
+                  final icon = switch (issue.severity) {
+                    RenameIssueSeverity.info => Icons.info_outline,
+                    RenameIssueSeverity.warning => Icons.warning_amber_rounded,
+                    RenameIssueSeverity.error => Icons.error_outline,
+                  };
+                  final color = switch (issue.severity) {
+                    RenameIssueSeverity.info => Theme.of(
+                      context,
+                    ).colorScheme.primary,
+                    RenameIssueSeverity.warning => Colors.orange.shade700,
+                    RenameIssueSeverity.error => Theme.of(
+                      context,
+                    ).colorScheme.error,
+                  };
                   return ListTile(
                     dense: true,
-                    leading: Icon(
-                      Icons.warning_amber_rounded,
-                      color: Theme.of(context).colorScheme.error,
-                    ),
-                    title: Text(
-                      '文件: $fileName',
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.onErrorContainer,
-                      ),
-                    ),
-                    subtitle: Text(
-                      error.message,
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.onErrorContainer
-                            .withAlpha(204), // 255 * 0.8
-                      ),
-                    ),
+                    leading: Icon(icon, color: color),
+                    title: Text(issue.fileName ?? issue.code),
+                    subtitle: Text(_formatIssueSubtitle(issue)),
                   );
                 },
               ),
@@ -362,143 +417,225 @@ class _RenameScreenState extends State<RenameScreen>
     );
   }
 
-  /// 构建文件信息和操作按钮
-  Widget _buildFileInfoAndActions(RenameProvider renameProvider) {
-    // 提取操作按钮到一个独立的Widget，方便复用
+  String _formatIssueSubtitle(RenameIssue issue) {
+    if (issue.targetPath != null && issue.targetPath!.isNotEmpty) {
+      return '${issue.message}\n目标: ${issue.targetPath}';
+    }
+    return issue.message;
+  }
+
+  Widget _buildFileInfoAndActions(RenameProvider provider) {
+    final summary = provider.previewPlan.summary;
     final actionButtons = Wrap(
-      spacing: 8.0,
+      spacing: 8,
       crossAxisAlignment: WrapCrossAlignment.center,
-      alignment: WrapAlignment.end, // 在Column布局中让按钮靠右
+      alignment: WrapAlignment.end,
       children: [
-        // 同名合并开关
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('同名合并'),
-            Switch(
-              value: renameProvider.mergeSameName,
-              onChanged: (value) {
-                renameProvider.setMergeSameName(value);
-              },
-            ),
-          ],
+        Tooltip(
+          message: '按原始基础文件名分组编号，同名 JPG/RAW 可共用同一序号',
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('同名合并'),
+              Switch(
+                value: provider.mergeSameName,
+                onChanged: provider.setMergeSameName,
+              ),
+            ],
+          ),
         ),
-        // 排序按钮
         PopupMenuButton<SortCriterion>(
           icon: const Icon(Icons.sort),
           tooltip: '排序方式',
-          onSelected: (SortCriterion criterion) {
-            renameProvider.sortFiles(criterion);
-          },
-          itemBuilder: (BuildContext context) =>
-              <PopupMenuEntry<SortCriterion>>[
-                const PopupMenuItem<SortCriterion>(
-                  value: SortCriterion.nameAsc,
-                  child: Text('按名称升序'),
-                ),
-                const PopupMenuItem<SortCriterion>(
-                  value: SortCriterion.nameDesc,
-                  child: Text('按名称降序'),
-                ),
-                const PopupMenuItem<SortCriterion>(
-                  value: SortCriterion.dateAsc,
-                  child: Text('按日期升序'),
-                ),
-                const PopupMenuItem<SortCriterion>(
-                  value: SortCriterion.dateDesc,
-                  child: Text('按日期降序'),
-                ),
-              ],
+          onSelected: provider.sortFiles,
+          itemBuilder: (context) => const [
+            PopupMenuItem(value: SortCriterion.nameAsc, child: Text('按文件名升序')),
+            PopupMenuItem(value: SortCriterion.nameDesc, child: Text('按文件名降序')),
+            PopupMenuItem(value: SortCriterion.dateAsc, child: Text('按日期升序')),
+            PopupMenuItem(value: SortCriterion.dateDesc, child: Text('按日期降序')),
+          ],
         ),
-        // 清除选择按钮
         Tooltip(
           message: '清除列表',
           child: IconButton(
             icon: const Icon(Icons.clear),
-            onPressed: renameProvider.files.isNotEmpty
-                ? () {
-                    renameProvider.clearSelection();
-                  }
+            onPressed: provider.files.isNotEmpty
+                ? provider.clearSelection
                 : null,
           ),
         ),
-        // 撤销按钮
-        if (renameProvider.lastRenameLog.isNotEmpty)
+        if (provider.lastRenameLog.isNotEmpty)
           OutlinedButton(
-            onPressed: () {
-              renameProvider.undoRename();
+            onPressed: () async {
+              final result = await provider.undoRename();
+              if (!mounted) {
+                return;
+              }
+              final message = result.failedCount == 0
+                  ? '撤销操作已完成'
+                  : '撤销失败 ${result.failedCount} 项，请查看处理日志';
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('撤销操作已完成'),
-                  duration: Duration(seconds: 2),
+                SnackBar(
+                  content: Text(message),
+                  duration: const Duration(seconds: 2),
                 ),
               );
             },
             child: const Text('撤销上次操作'),
           ),
-        // 确定重命名按钮
         ElevatedButton(
-          onPressed: renameProvider.files.isNotEmpty
-              ? () => _showRenameConfirmationDialog(context, renameProvider)
+          onPressed: provider.files.isNotEmpty
+              ? () => _showRenameConfirmationDialog(context, provider)
               : null,
           child: const Text('确定重命名'),
         ),
       ],
     );
 
+    final optionFields = Wrap(
+      spacing: 12,
+      runSpacing: 12,
+      children: [
+        SizedBox(
+          width: 220,
+          child: DropdownButtonFormField<RenameConflictPolicy>(
+            value: provider.conflictPolicy,
+            decoration: const InputDecoration(
+              labelText: '冲突处理',
+              border: OutlineInputBorder(),
+            ),
+            items: RenameConflictPolicy.values
+                .map(
+                  (policy) => DropdownMenuItem(
+                    value: policy,
+                    child: Text(policy.displayName),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) {
+              if (value != null) {
+                provider.setConflictPolicy(value);
+              }
+            },
+          ),
+        ),
+        if (provider.activeMode == RenameMode.exif)
+          SizedBox(
+            width: 220,
+            child: DropdownButtonFormField<ExifMissingPolicy>(
+              value: provider.exifMissingPolicy,
+              decoration: const InputDecoration(
+                labelText: 'EXIF 缺失处理',
+                border: OutlineInputBorder(),
+              ),
+              items: ExifMissingPolicy.values
+                  .map(
+                    (policy) => DropdownMenuItem(
+                      value: policy,
+                      child: Text(policy.displayName),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) {
+                if (value != null) {
+                  provider.setExifMissingPolicy(value);
+                }
+              },
+            ),
+          ),
+        Chip(label: Text(_summaryText(summary))),
+      ],
+    );
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          // 设置一个断点，例如550
-          if (constraints.maxWidth > 550) {
-            // 宽屏布局
-            return Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('已选择 ${renameProvider.files.length} 个文件'),
-                actionButtons,
-              ],
-            );
-          } else {
-            // 窄屏布局
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text('已选择 ${renameProvider.files.length} 个文件'),
-                const SizedBox(height: 8),
-                actionButtons,
-              ],
-            );
-          }
-        },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          LayoutBuilder(
+            builder: (context, constraints) {
+              if (constraints.maxWidth > 720) {
+                return Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('已选择 ${provider.files.length} 个文件'),
+                    Flexible(child: actionButtons),
+                  ],
+                );
+              }
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text('已选择 ${provider.files.length} 个文件'),
+                  const SizedBox(height: 8),
+                  actionButtons,
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          optionFields,
+        ],
       ),
     );
+  }
+
+  String _summaryText(RenamePlanSummary summary) {
+    return '将改名 ${summary.renameCount} | 跳过 ${summary.skippedCount} | 冲突 ${summary.conflictCount} | 警告 ${summary.warningCount}';
   }
 
   void _showRenameConfirmationDialog(
     BuildContext context,
     RenameProvider provider,
   ) {
+    final plan = provider.previewPlan;
     showDialog(
       context: context,
-      builder: (BuildContext dialogContext) {
+      builder: (dialogContext) {
         return AlertDialog(
           title: const Text('确认重命名'),
-          content: Text('即将重命名 ${provider.files.length} 个文件，是否继续？'),
-          actions: <Widget>[
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_summaryText(plan.summary)),
+                const SizedBox(height: 12),
+                if (plan.summary.renameCount == 0) const Text('当前没有可执行的重命名项。'),
+                if (plan.summary.conflictCount > 0) ...[
+                  const Text(
+                    '检测到冲突，当前策略下不能直接执行。',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  ...plan.items
+                      .where(
+                        (item) => item.status == RenamePreviewStatus.conflict,
+                      )
+                      .take(5)
+                      .map(
+                        (item) => Text(
+                          '${item.originalName} -> ${item.primaryMessage}',
+                        ),
+                      ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
             TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
               child: const Text('取消'),
-              onPressed: () {
-                Navigator.of(dialogContext).pop();
-              },
             ),
             TextButton(
+              onPressed: plan.canExecute
+                  ? () {
+                      Navigator.of(dialogContext).pop();
+                      _executeRename(context, provider);
+                    }
+                  : null,
               child: const Text('确认'),
-              onPressed: () {
-                Navigator.of(dialogContext).pop(); // Close confirmation dialog
-                _executeRename(context, provider);
-              },
             ),
           ],
         );
@@ -510,70 +647,66 @@ class _RenameScreenState extends State<RenameScreen>
     BuildContext context,
     RenameProvider provider,
   ) async {
-    // 在异步操作之前获取Navigator和Context
     final navigator = Navigator.of(context);
-    final currentContext = context;
-
-    // Show loading indicator
-    if (!mounted) return;
     showDialog(
-      context: currentContext,
+      context: context,
       barrierDismissible: false,
-      builder: (BuildContext dialogContext) {
+      builder: (dialogContext) {
         return const AlertDialog(
           content: Row(
             children: [
               CircularProgressIndicator(),
               SizedBox(width: 20),
-              Text("正在重命名..."),
+              Expanded(child: Text('正在重命名...')),
             ],
           ),
         );
       },
     );
 
-    try {
-      final result = await provider.executeRename();
-      if (!mounted) return;
-      navigator.pop(); // Close loading dialog
+    final result = await provider.executeRename();
+    if (!mounted) {
+      return;
+    }
+    navigator.pop();
 
-      // Show result dialog
-      if (!mounted) return;
-      if (!currentContext.mounted) return;
-      await showDialog(
-        context: currentContext,
-        builder: (BuildContext dialogContext) {
-          return AlertDialog(
-            title: const Text('重命名完成'),
-            content: SingleChildScrollView(
+    await showDialog(
+      context: this.context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('重命名完成'),
+          content: SizedBox(
+            width: 460,
+            child: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('成功：${result['success']} 个\n失败：${result['failed']} 个'),
-                  if (provider.lastFailedFiles.isNotEmpty) ...[
+                  Text(
+                    '成功：${result.successCount} 个\n失败：${result.failedCount} 个\n跳过：${result.skippedCount} 个\n警告：${result.warningCount} 个',
+                  ),
+                  if (result.issues.isNotEmpty) ...[
                     const SizedBox(height: 16),
                     const Text(
-                      '失败详情:',
+                      '处理详情',
                       style: TextStyle(fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 8),
                     SizedBox(
-                      height: 150, // 限制列表高度
-                      width: double.maxFinite,
+                      height: 180,
                       child: ListView.builder(
-                        shrinkWrap: true,
-                        itemCount: provider.lastFailedFiles.length,
+                        itemCount: result.issues.length,
                         itemBuilder: (context, index) {
-                          final failedFile = provider.lastFailedFiles[index];
-                          final fileName =
-                              failedFile['path']
-                                  ?.split(Platform.pathSeparator)
-                                  .last ??
-                              'Unknown File';
-                          return Tooltip(
-                            message: '路径: ${failedFile['path']}',
-                            child: Text('$fileName: ${failedFile['error']}'),
+                          final issue = result.issues[index];
+                          final fileName = issue.fileName ?? '未指定文件';
+                          final targetText = issue.targetPath == null
+                              ? ''
+                              : '\n目标: ${issue.targetPath}';
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: Text(
+                              '$fileName: ${issue.message}$targetText',
+                            ),
                           );
                         },
                       ),
@@ -582,46 +715,27 @@ class _RenameScreenState extends State<RenameScreen>
                 ],
               ),
             ),
-            actions: <Widget>[
-              TextButton(
-                child: const Text('好的'),
-                onPressed: () {
-                  if (!dialogContext.mounted) return;
-                  Navigator.of(dialogContext).pop();
-                },
-              ),
-            ],
-          );
-        },
-      );
-      // Clear selection after showing result
-      if (!mounted) return;
-      // 操作成功后不清空文件列表，以便用户看到结果并可以撤销
-      // provider.clearSelection();
-    } catch (e) {
-      if (!mounted) return;
-      navigator.pop(); // Close loading dialog on error
-      // Show error dialog
-      if (!mounted) return;
-      if (!currentContext.mounted) return;
-      await showDialog(
-        context: currentContext,
-        builder: (BuildContext dialogContext) {
-          return AlertDialog(
-            title: const Text('发生错误'),
-            content: Text('重命名失败: $e'),
-            actions: <Widget>[
-              TextButton(
-                child: const Text('好的'),
-                onPressed: () {
-                  if (!dialogContext.mounted) return;
-                  Navigator.of(dialogContext).pop();
-                },
-              ),
-            ],
-          );
-        },
-      );
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('好的'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showPermissionDeniedSnackBar() {
+    if (!mounted) {
+      return;
     }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('存储权限被拒绝，无法访问文件夹中的文件。请在设置中授予权限后重试。'),
+        duration: Duration(seconds: 3),
+      ),
+    );
   }
 }

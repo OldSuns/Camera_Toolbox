@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
 import '../rename_provider.dart';
 
 class AppendRenameView extends StatefulWidget {
@@ -10,8 +11,8 @@ class AppendRenameView extends StatefulWidget {
 }
 
 class _AppendRenameViewState extends State<AppendRenameView> {
-  late TextEditingController _prefixController;
-  late TextEditingController _suffixController;
+  late final TextEditingController _prefixController;
+  late final TextEditingController _suffixController;
 
   @override
   void initState() {
@@ -30,8 +31,7 @@ class _AppendRenameViewState extends State<AppendRenameView> {
   @override
   Widget build(BuildContext context) {
     return Consumer<RenameProvider>(
-      builder: (context, provider, child) {
-        // 更新controller的文本（仅当文本不同时才更新）
+      builder: (context, provider, _) {
         if (_prefixController.text != provider.appendPrefix) {
           _prefixController.text = provider.appendPrefix;
         }
@@ -40,7 +40,7 @@ class _AppendRenameViewState extends State<AppendRenameView> {
         }
 
         return Padding(
-          padding: const EdgeInsets.all(16.0),
+          padding: const EdgeInsets.all(16),
           child: SingleChildScrollView(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -56,9 +56,7 @@ class _AppendRenameViewState extends State<AppendRenameView> {
                     labelText: '前缀',
                     border: OutlineInputBorder(),
                   ),
-                  onChanged: (value) {
-                    provider.setAppendPrefix(value);
-                  },
+                  onChanged: provider.setAppendPrefix,
                 ),
                 const SizedBox(height: 16),
                 TextField(
@@ -67,17 +65,33 @@ class _AppendRenameViewState extends State<AppendRenameView> {
                     labelText: '后缀',
                     border: OutlineInputBorder(),
                   ),
-                  onChanged: (value) {
-                    provider.setAppendSuffix(value);
-                  },
+                  onChanged: provider.setAppendSuffix,
                 ),
                 const SizedBox(height: 16),
-                SwitchListTile(
-                  title: const Text('在原文件名后追加'),
-                  value: provider.appendAfterFilename,
+                DropdownButtonFormField<AppendMode>(
+                  value: provider.appendMode,
+                  decoration: const InputDecoration(
+                    labelText: '追加位置',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: AppendMode.values
+                      .map(
+                        (mode) => DropdownMenuItem(
+                          value: mode,
+                          child: Text(mode.displayName),
+                        ),
+                      )
+                      .toList(),
                   onChanged: (value) {
-                    provider.setAppendAfterFilename(value);
+                    if (value != null) {
+                      provider.setAppendMode(value);
+                    }
                   },
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  provider.appendMode.description,
+                  style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
             ),
