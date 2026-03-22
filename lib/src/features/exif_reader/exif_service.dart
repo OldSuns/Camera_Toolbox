@@ -152,7 +152,9 @@ class ExifService {
       'EXIF FocalLengthIn35mmFilm',
 
       // GPS信息
+      'GPS GPSLatitudeRef',
       'GPS GPSLatitude',
+      'GPS GPSLongitudeRef',
       'GPS GPSLongitude',
       'GPS GPSAltitude',
       'GPS GPSDateStamp',
@@ -161,7 +163,15 @@ class ExifService {
 
     for (final entry in data.entries) {
       if (importantTags.contains(entry.key)) {
-        filtered[entry.key] = entry.value.printable;
+        switch (entry.key) {
+          case 'GPS GPSLatitude':
+          case 'GPS GPSLongitude':
+            filtered[entry.key] = entry.value.values.toList();
+            break;
+          default:
+            filtered[entry.key] = entry.value.printable;
+            break;
+        }
       }
     }
 
@@ -194,9 +204,9 @@ class ExifService {
             : 'GPS GPSLongitudeRef';
 
         final coordinates = data[gpsKey];
-        final ref = data[refKey];
+        final ref = data[refKey]?.toString();
 
-        if (coordinates != null && ref != null) {
+        if (coordinates is List && ref != null) {
           final formatted = ExifTranslator.formatGpsCoordinate(
             coordinates,
             ref,
@@ -239,6 +249,13 @@ class ExifService {
     }
 
     return translated;
+  }
+
+  @visibleForTesting
+  static Map<String, String> translateAndFormatExifDataForTesting(
+    Map<String, dynamic> data,
+  ) {
+    return _translateAndFormatExifData(data);
   }
 
   /// 格式化曝光时间
@@ -335,6 +352,8 @@ class ExifService {
       'jpg',
       'jpeg',
       'png',
+      'heic',
+      'heif',
       'tiff',
       'tif',
       'webp',
@@ -342,10 +361,26 @@ class ExifService {
       'raw',
       'dng',
       'crw',
+      'cr2',
       'cr3',
       'nrw',
       'nef',
       'raf',
+      'orf',
+      'rw2',
+      'pef',
+      'ptx',
+      'srf',
+      'sr2',
+      'srw',
+      'gpr',
+      '3fr',
+      'fff',
+      'dcr',
+      'kdc',
+      'mrw',
+      'mos',
+      'x3f',
     ].contains(extension);
   }
 

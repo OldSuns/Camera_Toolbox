@@ -650,16 +650,18 @@ class PhotoWatermarkProvider extends ChangeNotifier {
 
   /// 处理下一个请求
   void _processNextRequest() {
+    if (_status != ProcessingStatus.processing) {
+      return;
+    }
+
     if (_requestQueue.isEmpty) {
       // 如果队列为空且没有待处理任务，则完成
       if (_pendingTasks.isEmpty) {
-        Future.delayed(const Duration(milliseconds: 100), () {
-          if (_status == ProcessingStatus.processing &&
-              !_batchProcessingCancelled) {
-            _status = ProcessingStatus.completed;
-            notifyListeners();
-          }
-        });
+        if (!_batchProcessingCancelled) {
+          _status = ProcessingStatus.completed;
+        }
+        _disposeIsolatePool();
+        notifyListeners();
       }
       return;
     }
@@ -697,6 +699,13 @@ class PhotoWatermarkProvider extends ChangeNotifier {
   void cancelBatchProcessing() {
     _batchProcessingCancelled = true;
     _status = ProcessingStatus.idle;
+    for (final task in _batchTasks) {
+      if (task.status == ProcessingStatus.processing) {
+        task.status = ProcessingStatus.idle;
+        task.progress = 0.0;
+      }
+    }
+    _disposeIsolatePool();
     notifyListeners();
   }
 
@@ -785,18 +794,36 @@ class PhotoWatermarkProvider extends ChangeNotifier {
   Future<void> openOutputDirectory() async {
     // On mobile, we can't open a directory or a specific file from gallery.
     // This function will only work on desktop.
-    if (Platform.isWindows || Platform.isLinux) {
+    if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
       if (_outputDirectory != null && await _outputDirectory!.exists()) {
-        final path = _outputDirectory!.path;
+        final directoryPath = _outputDirectory!.path;
         if (Platform.isWindows) {
-          await Process.run('explorer', [path]);
+          await Process.run('explorer', [directoryPath]);
         } else if (Platform.isMacOS) {
-          await Process.run('open', [path]);
+          await Process.run('open', [directoryPath]);
         } else if (Platform.isLinux) {
-          await Process.run('xdg-open', [path]);
+          await Process.run('xdg-open', [directoryPath]);
         }
       }
     }
+  }
+
+  void _disposeIsolatePool() {
+    for (final receivePort in _receivePorts) {
+      receivePort.close();
+    }
+    for (final isolate in _isolates) {
+      isolate?.kill(priority: Isolate.immediate);
+    }
+    _receivePorts.clear();
+    _isolates.clear();
+    _sendPorts.clear();
+    _sendPortCompleters.clear();
+    _requestQueue.clear();
+    _pendingTasks.clear();
+    _processingCount = 0;
+    _currentIsolateIndex = 0;
+    _isolatesInitialized = false;
   }
 
   /// 根据CPU核心数初始化设置
@@ -893,6 +920,7 @@ class PhotoWatermarkProvider extends ChangeNotifier {
   void dispose() {
     // 取消批处理
     _batchProcessingCancelled = true;
+    _disposeIsolatePool();
 
     // 清理图像资源
     _currentImage?.dispose();

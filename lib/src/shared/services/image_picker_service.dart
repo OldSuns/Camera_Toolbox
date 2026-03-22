@@ -129,7 +129,16 @@ class ImagePickerService {
     if (!file.existsSync()) return false;
 
     final extension = file.path.toLowerCase().split('.').last;
-    final supportedExtensions = ['jpg', 'jpeg', 'png', 'tiff', 'tif', 'webp'];
+    final supportedExtensions = [
+      'jpg',
+      'jpeg',
+      'png',
+      'heic',
+      'heif',
+      'tiff',
+      'tif',
+      'webp',
+    ];
 
     return supportedExtensions.contains(extension);
   }

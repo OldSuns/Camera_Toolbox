@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:async';
 
 import 'package:file_picker/file_picker.dart';
@@ -13,6 +14,9 @@ import '../../shared/widgets/responsive_layout.dart';
 import 'local_picker_provider.dart';
 
 const double _localPickerCompactBreakpoint = 760;
+const double _localPickerScopeFieldWidth = 196;
+const double _localPickerSortFieldWidth = 204;
+const double _localPickerFilterFieldWidth = 172;
 
 @immutable
 class _LocalPickerBodyViewModel {
@@ -76,6 +80,8 @@ class _LocalPickerView extends StatefulWidget {
 
 class _LocalPickerViewState extends State<_LocalPickerView> {
   final ScrollController _scrollController = ScrollController();
+  LocalPickerProvider? _provider;
+  int? _lastHandledMessageId;
 
   @override
   void initState() {
@@ -89,9 +95,39 @@ class _LocalPickerViewState extends State<_LocalPickerView> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final provider = context.read<LocalPickerProvider>();
+    if (!identical(_provider, provider)) {
+      _provider?.removeListener(_handleProviderMessages);
+      _provider = provider;
+      _provider?.addListener(_handleProviderMessages);
+    }
+  }
+
+  @override
   void dispose() {
+    _provider?.removeListener(_handleProviderMessages);
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _handleProviderMessages() {
+    final message = _provider?.pendingUserMessage;
+    if (!mounted || message == null || _lastHandledMessageId == message.id) {
+      return;
+    }
+
+    _lastHandledMessageId = message.id;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message.message)));
+      _provider?.clearPendingUserMessage(message.id);
+    });
   }
 
   @override
@@ -264,9 +300,21 @@ class _LocalPickerViewState extends State<_LocalPickerView> {
             runSpacing: 12,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              _buildScopeField(context, provider, width: 180),
-              _buildSortField(context, provider, width: 180),
-              _buildFilterField(context, provider, width: 160),
+              _buildScopeField(
+                context,
+                provider,
+                width: _localPickerScopeFieldWidth,
+              ),
+              _buildSortField(
+                context,
+                provider,
+                width: _localPickerSortFieldWidth,
+              ),
+              _buildFilterField(
+                context,
+                provider,
+                width: _localPickerFilterFieldWidth,
+              ),
               _buildSelectionActionButtons(provider),
               _buildCaptureInfoSettingTile(provider),
             ],
@@ -428,7 +476,8 @@ class _LocalPickerViewState extends State<_LocalPickerView> {
     double? width,
   }) {
     final field = DropdownButtonFormField<FolderScanScope>(
-      value: provider.scanScope,
+      initialValue: provider.scanScope,
+      isExpanded: true,
       decoration: _toolbarInputDecoration(
         context,
         label: '扫描范围',
@@ -455,7 +504,8 @@ class _LocalPickerViewState extends State<_LocalPickerView> {
     double? width,
   }) {
     final field = DropdownButtonFormField<LocalPickerSortMode>(
-      value: provider.sortMode,
+      initialValue: provider.sortMode,
+      isExpanded: true,
       decoration: _toolbarInputDecoration(
         context,
         label: '排序',
@@ -482,7 +532,8 @@ class _LocalPickerViewState extends State<_LocalPickerView> {
     double? width,
   }) {
     final field = DropdownButtonFormField<LocalPickerFilterMode>(
-      value: provider.filterMode,
+      initialValue: provider.filterMode,
+      isExpanded: true,
       decoration: _toolbarInputDecoration(
         context,
         label: '筛选',
@@ -552,8 +603,16 @@ class _LocalPickerViewState extends State<_LocalPickerView> {
     await showDialog(
       context: context,
       builder: (dialogContext) {
+        final hasFailures = result.failedCount > 0;
+        final hasSkips = result.skippedCount > 0;
         return AlertDialog(
-          title: const Text('导出完成'),
+          title: Text(
+            hasFailures
+                ? '导出完成（部分成功）'
+                : hasSkips
+                ? '导出完成（有跳过）'
+                : '导出完成',
+          ),
           content: SizedBox(
             width: 460,
             child: SingleChildScrollView(
@@ -598,6 +657,17 @@ class _LocalPickerViewState extends State<_LocalPickerView> {
             ),
           ),
           actions: [
+            if (_isDesktopPlatform)
+              TextButton(
+                onPressed: () async {
+                  Navigator.of(dialogContext).pop();
+                  await _openDirectory(
+                    options.targetDirectory,
+                    context: context,
+                  );
+                },
+                child: const Text('打开目录'),
+              ),
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(),
               child: const Text('好的'),
@@ -702,7 +772,8 @@ class _LocalPickerExportDialogState extends State<LocalPickerExportDialog> {
               ),
               const SizedBox(height: 16),
               DropdownButtonFormField<ConflictAction>(
-                value: _conflictAction,
+                initialValue: _conflictAction,
+                isExpanded: true,
                 decoration: const InputDecoration(
                   labelText: '冲突处理',
                   border: OutlineInputBorder(),
@@ -1184,11 +1255,37 @@ class _LocalPickerToolbarDropdown<T> extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return DropdownButtonFormField<T>(
-      value: value,
+      initialValue: value,
+      isExpanded: true,
       decoration: decoration,
       items: items,
       onChanged: onChanged,
     );
+  }
+}
+
+bool get _isDesktopPlatform =>
+    Platform.isWindows || Platform.isMacOS || Platform.isLinux;
+
+Future<void> _openDirectory(
+  String path, {
+  required BuildContext context,
+}) async {
+  try {
+    if (Platform.isWindows) {
+      await Process.run('explorer', [path]);
+    } else if (Platform.isMacOS) {
+      await Process.run('open', [path]);
+    } else if (Platform.isLinux) {
+      await Process.run('xdg-open', [path]);
+    }
+  } catch (error) {
+    if (!context.mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('无法打开目录: $error')));
   }
 }
 

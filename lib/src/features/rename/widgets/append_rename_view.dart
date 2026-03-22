@@ -69,7 +69,7 @@ class _AppendRenameViewState extends State<AppendRenameView> {
                 ),
                 const SizedBox(height: 16),
                 DropdownButtonFormField<AppendMode>(
-                  value: provider.appendMode,
+                  initialValue: provider.appendMode,
                   decoration: const InputDecoration(
                     labelText: '追加位置',
                     border: OutlineInputBorder(),

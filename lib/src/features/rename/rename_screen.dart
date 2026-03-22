@@ -472,7 +472,7 @@ class _RenameScreenState extends State<RenameScreen>
         SizedBox(
           width: 220,
           child: DropdownButtonFormField<RenameConflictPolicy>(
-            value: provider.conflictPolicy,
+            initialValue: provider.conflictPolicy,
             decoration: const InputDecoration(
               labelText: '冲突处理',
               border: OutlineInputBorder(),
@@ -496,7 +496,7 @@ class _RenameScreenState extends State<RenameScreen>
           SizedBox(
             width: 220,
             child: DropdownButtonFormField<ExifMissingPolicy>(
-              value: provider.exifMissingPolicy,
+              initialValue: provider.exifMissingPolicy,
               decoration: const InputDecoration(
                 labelText: 'EXIF 缺失处理',
                 border: OutlineInputBorder(),

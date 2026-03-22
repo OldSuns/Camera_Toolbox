@@ -14,6 +14,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../../shared/utils/conflict_action.dart';
+import '../exif_reader/exif_data.dart';
 import '../exif_reader/exif_service.dart';
 import 'local_picker_models.dart';
 
@@ -22,6 +23,8 @@ const Set<String> _supportedImageExtensions = {
   '.jpeg',
   '.png',
   '.heic',
+  '.heif',
+  '.webp',
 };
 
 const Set<String> _supportedRawExtensions = {
@@ -143,12 +146,21 @@ Future<void> _processSingleThumbnail(
 }
 
 class LocalPickerProvider with ChangeNotifier {
-  LocalPickerProvider({int pageSize = 100}) : _pageSize = pageSize {
+  LocalPickerProvider({
+    int pageSize = 100,
+    Future<Directory> Function()? cacheDirectoryProvider,
+    Future<ExifData> Function(String path)? exifReader,
+  }) : _pageSize = pageSize,
+       _cacheDirectoryProvider =
+           cacheDirectoryProvider ?? getApplicationCacheDirectory,
+       _exifReader = exifReader ?? ExifService.readExifFromFile {
     _initCpuBasedSettings();
     unawaited(_initCacheDir());
   }
 
   final int _pageSize;
+  final Future<Directory> Function() _cacheDirectoryProvider;
+  final Future<ExifData> Function(String path) _exifReader;
 
   final List<LocalImageEntry> _allImageEntries = [];
   List<LocalImageEntry> get allImageEntries =>
@@ -184,12 +196,16 @@ class LocalPickerProvider with ChangeNotifier {
 
   bool _showCaptureInfo = false;
   bool get showCaptureInfo => _showCaptureInfo;
+  int _messageSequence = 0;
+  LocalPickerUserMessage? _pendingUserMessage;
+  LocalPickerUserMessage? get pendingUserMessage => _pendingUserMessage;
 
   final Map<String, LocalImageMetadata> _metadataCache = {};
   Map<String, LocalImageMetadata> get metadataCache =>
       Map.unmodifiable(_metadataCache);
   final Set<String> _pendingMetadataPaths = {};
-  Set<String> get pendingMetadataPaths => Set.unmodifiable(_pendingMetadataPaths);
+  Set<String> get pendingMetadataPaths =>
+      Set.unmodifiable(_pendingMetadataPaths);
 
   int get totalImageCount => _allImageEntries.length;
   int get filteredImageCount => _filteredImageEntries.length;
@@ -283,7 +299,7 @@ class LocalPickerProvider with ChangeNotifier {
   }
 
   Future<void> _initCacheDir() async {
-    final cache = await getApplicationCacheDirectory();
+    final cache = await _cacheDirectoryProvider();
     _cacheDir = Directory(p.join(cache.path, 'thumbnails'));
     if (!await _cacheDir!.exists()) {
       await _cacheDir!.create(recursive: true);
@@ -417,10 +433,28 @@ class LocalPickerProvider with ChangeNotifier {
       }
     } catch (error) {
       debugPrint('Error loading local picker directory: $error');
+      _emitUserMessage('加载目录失败: $error');
     } finally {
       _isLoading = false;
       notifyListeners();
     }
+  }
+
+  void _emitUserMessage(String message) {
+    _pendingUserMessage = LocalPickerUserMessage(
+      id: ++_messageSequence,
+      message: message,
+    );
+    if (!_disposed) {
+      notifyListeners();
+    }
+  }
+
+  void clearPendingUserMessage(int id) {
+    if (_pendingUserMessage?.id != id) {
+      return;
+    }
+    _pendingUserMessage = null;
   }
 
   Future<void> _resetSessionState({bool clearDirectory = true}) async {
@@ -552,13 +586,17 @@ class LocalPickerProvider with ChangeNotifier {
   }
 
   void deselectAll() {
-    final filteredPaths = _filteredImageEntries.map((entry) => entry.path).toSet();
+    final filteredPaths = _filteredImageEntries
+        .map((entry) => entry.path)
+        .toSet();
     _selectedImagePaths.removeWhere(filteredPaths.contains);
     notifyListeners();
   }
 
   void invertSelection() {
-    final filteredPaths = _filteredImageEntries.map((entry) => entry.path).toSet();
+    final filteredPaths = _filteredImageEntries
+        .map((entry) => entry.path)
+        .toSet();
     for (final path in filteredPaths) {
       if (_selectedImagePaths.contains(path)) {
         _selectedImagePaths.remove(path);
@@ -662,12 +700,14 @@ class LocalPickerProvider with ChangeNotifier {
     }
   }
 
-  Future<LocalImageMetadata> _loadMetadataForEntry(LocalImageEntry entry) async {
+  Future<LocalImageMetadata> _loadMetadataForEntry(
+    LocalImageEntry entry,
+  ) async {
     if (!ExifService.isSupportedImage(entry.path)) {
       return LocalImageMetadata.fallback(entry.lastModified);
     }
 
-    final exifData = await ExifService.readExifFromFile(entry.path);
+    final exifData = await _exifReader(entry.path);
     final translated = exifData.translatedData;
     final captureTime = _parseCaptureTime(translated['拍摄时间']);
 
@@ -682,8 +722,7 @@ class LocalPickerProvider with ChangeNotifier {
       cameraModel: _nullIfBlank(translated['相机型号']),
       aperture: _nullIfBlank(translated['光圈值']),
       shutterSpeed:
-          _nullIfBlank(translated['快门速度']) ??
-          _nullIfBlank(translated['曝光时间']),
+          _nullIfBlank(translated['快门速度']) ?? _nullIfBlank(translated['曝光时间']),
       iso: _nullIfBlank(translated['ISO感光度']),
       focalLength: _nullIfBlank(translated['焦距']),
     );
@@ -900,10 +939,7 @@ class LocalPickerProvider with ChangeNotifier {
     if (_filteredImageEntries.isEmpty) {
       return;
     }
-    for (final index in [
-      _currentImageIndex - 1,
-      _currentImageIndex + 1,
-    ]) {
+    for (final index in [_currentImageIndex - 1, _currentImageIndex + 1]) {
       _precacheImageAtIndex(context, index);
       _warmMetadataForIndex(index);
     }
@@ -926,13 +962,11 @@ class LocalPickerProvider with ChangeNotifier {
     final provider = getImageProvider(imagePath);
     _preloadedImagePaths.add(imagePath);
     unawaited(
-      precacheImage(
-        provider,
-        context,
-        size: const Size(1920, 1080),
-      ).catchError((error) {
-        debugPrint('Failed to precache image $imagePath: $error');
-      }),
+      precacheImage(provider, context, size: const Size(1920, 1080)).catchError(
+        (error) {
+          debugPrint('Failed to precache image $imagePath: $error');
+        },
+      ),
     );
   }
 
@@ -950,18 +984,6 @@ class LocalPickerProvider with ChangeNotifier {
       );
     }
 
-    final targetDirectory = Directory(options.targetDirectory);
-    if (!await targetDirectory.exists()) {
-      await targetDirectory.create(recursive: true);
-    }
-
-    final existingFileNames = <String>{};
-    await for (final entity in targetDirectory.list(recursive: false)) {
-      if (entity is File) {
-        existingFileNames.add(p.basename(entity.path));
-      }
-    }
-
     _isExporting = true;
     _exportProgress = 0;
     notifyListeners();
@@ -969,6 +991,8 @@ class LocalPickerProvider with ChangeNotifier {
     final selectedEntries = _allImageEntries
         .where((entry) => _selectedImagePaths.contains(entry.path))
         .toList(growable: false);
+    final targetDirectory = Directory(options.targetDirectory);
+    final existingFileNames = <String>{};
 
     var exportedImageCount = 0;
     var exportedRawCount = 0;
@@ -978,15 +1002,37 @@ class LocalPickerProvider with ChangeNotifier {
     final issues = <LocalPickerExportIssue>[];
 
     try {
+      if (!await targetDirectory.exists()) {
+        await targetDirectory.create(recursive: true);
+      }
+
+      await for (final entity in targetDirectory.list(recursive: false)) {
+        if (entity is File) {
+          existingFileNames.add(p.basename(entity.path));
+        }
+      }
+
       for (var index = 0; index < selectedEntries.length; index++) {
         final entry = selectedEntries[index];
         var itemRenamed = false;
+        String? imageTargetPath;
         try {
+          final desiredImageTargetPath = p.join(
+            options.targetDirectory,
+            entry.fileName,
+          );
+          final desiredRawFileName = entry.rawPath == null
+              ? null
+              : '${p.basenameWithoutExtension(entry.fileName)}${p.extension(entry.rawPath!).toLowerCase()}';
           final resolved = _resolveExportNames(
             entry: entry,
             existingFileNames: existingFileNames,
             options: options,
           );
+
+          imageTargetPath = resolved.imageFileName == null
+              ? desiredImageTargetPath
+              : p.join(options.targetDirectory, resolved.imageFileName!);
 
           if (resolved.imageSkipped || resolved.imageFileName == null) {
             skippedCount++;
@@ -994,6 +1040,7 @@ class LocalPickerProvider with ChangeNotifier {
               LocalPickerExportIssue(
                 sourcePath: entry.path,
                 message: '目标文件已存在，按策略跳过',
+                targetPath: imageTargetPath,
               ),
             );
             _exportProgress = (index + 1) / selectedEntries.length;
@@ -1001,13 +1048,9 @@ class LocalPickerProvider with ChangeNotifier {
             continue;
           }
 
-          final imageTargetPath = p.join(
-            options.targetDirectory,
-            resolved.imageFileName!,
-          );
           await _copyWithConflictAction(
             sourcePath: entry.path,
-            targetPath: imageTargetPath,
+            targetPath: imageTargetPath!,
             action: options.conflictAction,
           );
           existingFileNames.add(resolved.imageFileName!);
@@ -1015,23 +1058,25 @@ class LocalPickerProvider with ChangeNotifier {
           itemRenamed = resolved.wasRenamed;
 
           if (options.includeRaw && entry.rawPath != null) {
+            final rawTargetPath = resolved.rawFileName == null
+                ? (desiredRawFileName == null
+                      ? null
+                      : p.join(options.targetDirectory, desiredRawFileName))
+                : p.join(options.targetDirectory, resolved.rawFileName!);
             if (resolved.rawSkipped || resolved.rawFileName == null) {
               skippedCount++;
               issues.add(
                 LocalPickerExportIssue(
                   sourcePath: entry.rawPath!,
                   message: 'RAW 目标文件已存在，按策略跳过',
+                  targetPath: rawTargetPath,
                   isRaw: true,
                 ),
               );
             } else {
-              final rawTargetPath = p.join(
-                options.targetDirectory,
-                resolved.rawFileName!,
-              );
               await _copyWithConflictAction(
                 sourcePath: entry.rawPath!,
-                targetPath: rawTargetPath,
+                targetPath: rawTargetPath!,
                 action: options.conflictAction,
               );
               existingFileNames.add(resolved.rawFileName!);
@@ -1048,6 +1093,7 @@ class LocalPickerProvider with ChangeNotifier {
             LocalPickerExportIssue(
               sourcePath: entry.path,
               message: '导出失败: $error',
+              targetPath: imageTargetPath,
             ),
           );
         } finally {
@@ -1057,6 +1103,16 @@ class LocalPickerProvider with ChangeNotifier {
           }
         }
       }
+    } catch (error) {
+      failedCount = selectedEntries.length;
+      issues.add(
+        LocalPickerExportIssue(
+          sourcePath: options.targetDirectory,
+          message: '初始化导出目录失败: $error',
+          targetPath: options.targetDirectory,
+        ),
+      );
+      _emitUserMessage('导出失败: $error');
     } finally {
       _isExporting = false;
       notifyListeners();
@@ -1091,7 +1147,8 @@ class LocalPickerProvider with ChangeNotifier {
         );
       case ConflictAction.skip:
         final imageExists = existingFileNames.contains(desiredImageFileName);
-        final rawExists = options.includeRaw &&
+        final rawExists =
+            options.includeRaw &&
             desiredRawFileName != null &&
             existingFileNames.contains(desiredRawFileName);
         return _ResolvedExportName(
@@ -1113,11 +1170,15 @@ class LocalPickerProvider with ChangeNotifier {
         while (true) {
           final suffix = counter == 0 ? '' : '_$counter';
           final candidateImageFileName = '$imageBase$suffix$imageExtension';
-          final candidateRawFileName = rawExtension == null || !options.includeRaw
+          final candidateRawFileName =
+              rawExtension == null || !options.includeRaw
               ? null
               : '$imageBase$suffix$rawExtension';
-          final imageConflict = existingFileNames.contains(candidateImageFileName);
-          final rawConflict = candidateRawFileName != null &&
+          final imageConflict = existingFileNames.contains(
+            candidateImageFileName,
+          );
+          final rawConflict =
+              candidateRawFileName != null &&
               existingFileNames.contains(candidateRawFileName);
           if (!imageConflict && !rawConflict) {
             return _ResolvedExportName(
@@ -1186,8 +1247,10 @@ class LocalPickerProvider with ChangeNotifier {
       );
       final chunkEntries = await Future.wait(
         chunk.map((file) async {
-          final rawPath = rawFilesByDirectory[p.dirname(file.path)]?[
-              p.basenameWithoutExtension(file.path).toLowerCase()];
+          final rawPath =
+              rawFilesByDirectory[p.dirname(file.path)]?[p
+                  .basenameWithoutExtension(file.path)
+                  .toLowerCase()];
           return LocalImageEntry(
             path: file.path,
             fileName: p.basename(file.path),
@@ -1265,9 +1328,7 @@ class LocalPickerProvider with ChangeNotifier {
             .where((entry) => _selectedImagePaths.contains(entry.path))
             .toList(growable: false);
       case LocalPickerFilterMode.withRaw:
-        return entries
-            .where((entry) => entry.hasRaw)
-            .toList(growable: false);
+        return entries.where((entry) => entry.hasRaw).toList(growable: false);
     }
   }
 
@@ -1291,3 +1352,5 @@ class LocalPickerProvider with ChangeNotifier {
     notifyListeners();
   }
 }
+
+

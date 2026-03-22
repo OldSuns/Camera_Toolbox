@@ -45,3 +45,8 @@ class FileCopyException extends QuickSplitException {
   FileCopyException(String source, String dest, String reason)
     : super('文件复制失败: $source -> $dest, 原因: $reason');
 }
+
+/// 用户主动取消处理
+class QuickSplitCancelledException extends QuickSplitException {
+  QuickSplitCancelledException() : super('快速分片已取消');
+}

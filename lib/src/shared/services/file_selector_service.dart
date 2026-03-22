@@ -26,7 +26,8 @@ class FileSelectorService {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions:
-          allowedExtensions ?? ['jpg', 'jpeg', 'png', 'tiff', 'tif'],
+          allowedExtensions ??
+          ['jpg', 'jpeg', 'png', 'heic', 'heif', 'tiff', 'tif', 'webp'],
       initialDirectory: initialDirectory,
     );
 

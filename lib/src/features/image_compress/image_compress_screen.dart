@@ -19,7 +19,7 @@ class _ImageCompressScreenState extends State<ImageCompressScreen> {
   final _maxWidthController = TextEditingController();
   final _maxHeightController = TextEditingController();
   String? _selectedOutputDirectory;
-  final Set<ImageFile> _selectedRows = {};
+  final Set<String> _selectedRowPaths = {};
   bool _overwriteOriginal = false;
   int? _sortColumnIndex;
   bool _sortAscending = true;
@@ -50,10 +50,13 @@ class _ImageCompressScreenState extends State<ImageCompressScreen> {
   }
 
   void _removeSelectedImages(ImageCompressService service) {
-    if (_selectedRows.isEmpty) return;
-    service.removeImages(_selectedRows.toList());
+    if (_selectedRowPaths.isEmpty) return;
+    final selectedImages = service.selectedImages
+        .where((image) => _selectedRowPaths.contains(image.filePath))
+        .toList(growable: false);
+    service.removeImages(selectedImages);
     setState(() {
-      _selectedRows.clear();
+      _selectedRowPaths.clear();
     });
   }
 
@@ -92,8 +95,7 @@ class _ImageCompressScreenState extends State<ImageCompressScreen> {
     });
   }
 
-  int get _selectedRowsDigest =>
-      Object.hashAllUnordered(_selectedRows.map((file) => file.filePath));
+  int get _selectedRowsDigest => Object.hashAllUnordered(_selectedRowPaths);
 
   @override
   Widget build(BuildContext context) {
@@ -192,13 +194,13 @@ class _ImageCompressScreenState extends State<ImageCompressScreen> {
   Widget _buildActionButtons({required bool isDesktop}) {
     return _ImageCompressActionButtons(
       isDesktop: isDesktop,
-      hasSelection: _selectedRows.isNotEmpty,
+      hasSelection: _selectedRowPaths.isNotEmpty,
       onPickImages: () => _pickImages(_service),
       onRemoveSelected: () => _removeSelectedImages(_service),
       onClearAll: () {
         _service.clearAllImages();
         setState(() {
-          _selectedRows.clear();
+          _selectedRowPaths.clear();
         });
       },
       onStartCompression: () => _startCompression(_service),
@@ -210,14 +212,14 @@ class _ImageCompressScreenState extends State<ImageCompressScreen> {
       child: _ImageCompressDataTable(
         sortColumnIndex: _sortColumnIndex,
         sortAscending: _sortAscending,
-        selectedRows: _selectedRows,
+        selectedRowPaths: _selectedRowPaths,
         onSort: _onSort,
-        onRowSelectionChanged: (file, selected) {
+        onRowSelectionChanged: (filePath, selected) {
           setState(() {
             if (selected) {
-              _selectedRows.add(file);
+              _selectedRowPaths.add(filePath);
             } else {
-              _selectedRows.remove(file);
+              _selectedRowPaths.remove(filePath);
             }
           });
         },
@@ -356,21 +358,21 @@ class _ImageCompressDataTable extends StatelessWidget {
   const _ImageCompressDataTable({
     required this.sortColumnIndex,
     required this.sortAscending,
-    required this.selectedRows,
+    required this.selectedRowPaths,
     required this.onSort,
     required this.onRowSelectionChanged,
   });
 
   final int? sortColumnIndex;
   final bool sortAscending;
-  final Set<ImageFile> selectedRows;
+  final Set<String> selectedRowPaths;
   final void Function(
     ImageCompressService service,
     int columnIndex,
     bool ascending,
   )
   onSort;
-  final void Function(ImageFile file, bool selected) onRowSelectionChanged;
+  final void Function(String filePath, bool selected) onRowSelectionChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -416,11 +418,11 @@ class _ImageCompressDataTable extends StatelessWidget {
             const DataColumn2(label: Text('状态'), size: ColumnSize.M),
           ],
           rows: service.selectedImages.map((file) {
-            final isSelected = selectedRows.contains(file);
+            final isSelected = selectedRowPaths.contains(file.filePath);
             return DataRow(
               selected: isSelected,
               onSelectChanged: (selected) {
-                onRowSelectionChanged(file, selected ?? false);
+                onRowSelectionChanged(file.filePath, selected ?? false);
               },
               cells: [
                 DataCell(

@@ -24,7 +24,7 @@ class AdaptiveNavigation extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return StableWidthBuilder<({AppLayoutMode layoutMode, bool railExtended})>(
-      cacheKey: (currentIndex, child),
+      cacheKey: currentIndex,
       resolve: (width) {
         final layoutMode = ResponsiveLayout.resolveMode(width);
         return (

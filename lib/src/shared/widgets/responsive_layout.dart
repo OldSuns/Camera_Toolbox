@@ -54,7 +54,7 @@ class ResponsiveLayout extends StatelessWidget {
   }
 }
 
-class StableWidthBuilder<T extends Object> extends StatefulWidget {
+class StableWidthBuilder<T extends Object> extends StatelessWidget {
   const StableWidthBuilder({
     super.key,
     required this.resolve,
@@ -67,32 +67,11 @@ class StableWidthBuilder<T extends Object> extends StatefulWidget {
   final Object? cacheKey;
 
   @override
-  State<StableWidthBuilder<T>> createState() => _StableWidthBuilderState<T>();
-}
-
-class _StableWidthBuilderState<T extends Object>
-    extends State<StableWidthBuilder<T>> {
-  T? _cachedValue;
-  Object? _cachedKey;
-  Widget? _cachedChild;
-
-  @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final resolvedValue = widget.resolve(constraints.maxWidth);
-        final shouldRebuild =
-            _cachedChild == null ||
-            _cachedValue != resolvedValue ||
-            _cachedKey != widget.cacheKey;
-
-        if (shouldRebuild) {
-          _cachedValue = resolvedValue;
-          _cachedKey = widget.cacheKey;
-          _cachedChild = widget.builder(context, resolvedValue);
-        }
-
-        return _cachedChild!;
+        final resolvedValue = resolve(constraints.maxWidth);
+        return builder(context, resolvedValue);
       },
     );
   }

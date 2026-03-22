@@ -101,7 +101,9 @@ class _PhotoWatermarkScreenState extends State<PhotoWatermarkScreen> {
               elevation: 0,
               backgroundColor: DesignTokens.backgroundSecondary,
               actions: [
-                if (Platform.isWindows || Platform.isLinux) ...[
+                if (Platform.isWindows ||
+                    Platform.isMacOS ||
+                    Platform.isLinux) ...[
                   _PhotoWatermarkOutputDirectoryButton(
                     onPressed: _pickOutputDirectory,
                   ),

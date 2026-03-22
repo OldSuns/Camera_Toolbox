@@ -131,7 +131,7 @@ class _AutoNumberingViewState extends State<AutoNumberingView> {
             const SizedBox(width: 16),
             Expanded(
               child: DropdownButtonFormField<NumberingType>(
-                value: provider.numberingType,
+                initialValue: provider.numberingType,
                 decoration: const InputDecoration(
                   labelText: '序号类型',
                   border: OutlineInputBorder(),
@@ -213,7 +213,7 @@ class _AutoNumberingViewState extends State<AutoNumberingView> {
               provider.setFixedDigits(int.tryParse(value) ?? 0),
         ),
         DropdownButtonFormField<NumberingType>(
-          value: provider.numberingType,
+          initialValue: provider.numberingType,
           decoration: const InputDecoration(
             labelText: '序号类型',
             border: OutlineInputBorder(),

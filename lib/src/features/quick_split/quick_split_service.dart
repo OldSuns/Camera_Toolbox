@@ -6,6 +6,9 @@ import 'quick_split_exception.dart';
 
 /// 快速分片服务 - 处理JPG-RAW文件匹配和拷贝
 class QuickSplitService {
+  QuickSplitService({Duration perChunkDelay = Duration.zero})
+    : _perChunkDelay = perChunkDelay;
+
   final List<String> supportedRawFormats = [
     '.raw', '.crw', // Canon
     '.cr2', '.cr3', // Canon
@@ -20,6 +23,8 @@ class QuickSplitService {
   ];
 
   bool _isCancelled = false;
+  final Duration _perChunkDelay;
+  bool get isCancelled => _isCancelled;
 
   /// 处理文件匹配和拷贝
   Future<void> processFiles({
@@ -64,7 +69,9 @@ class QuickSplitService {
     int processed = 0;
 
     for (final match in matches) {
-      if (_isCancelled) break;
+      if (_isCancelled) {
+        throw QuickSplitCancelledException();
+      }
 
       final fileName = path.basename(match.rawPath);
       final destPath = path.join(outputDirectory, fileName);
@@ -114,6 +121,10 @@ class QuickSplitService {
 
       processed++;
       onProgress(processed, matches.length);
+    }
+
+    if (_isCancelled) {
+      throw QuickSplitCancelledException();
     }
   }
 
@@ -265,9 +276,20 @@ class QuickSplitService {
         destFile.add(chunk);
         bytesCopied += chunk.length;
         onProgress(bytesCopied, sourceSize);
+        if (_perChunkDelay > Duration.zero) {
+          await Future.delayed(_perChunkDelay);
+        }
       }
 
       await destFile.close();
+
+      if (_isCancelled) {
+        final partialFile = File(destPath);
+        if (await partialFile.exists()) {
+          await partialFile.delete();
+        }
+        throw QuickSplitCancelledException();
+      }
 
       // 验证目标文件已创建且大小正确
       final destFileCheck = File(destPath);
@@ -294,6 +316,8 @@ class QuickSplitService {
     } on FileSystemException catch (e) {
       // 处理文件系统异常
       throw FileCopyException(sourcePath, destPath, '文件系统错误: ${e.message}');
+    } on QuickSplitCancelledException {
+      rethrow;
     } catch (e) {
       // 处理其他异常
       throw FileCopyException(sourcePath, destPath, '未知错误: $e');
@@ -308,4 +332,3 @@ class RawMatch {
 
   RawMatch({required this.imagePath, required this.rawPath});
 }
-

@@ -52,24 +52,29 @@ class _ThemeSettingsDialogState extends State<ThemeSettingsDialog> {
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
-            ...AppThemeMode.values.map(
-              (mode) => RadioListTile<AppThemeMode>(
-                title: Row(
-                  children: [
-                    Icon(mode.icon, size: 20),
-                    const SizedBox(width: 8),
-                    Text(mode.title),
-                  ],
-                ),
-                value: mode,
-                groupValue: _selectedMode,
-                onChanged: (value) {
-                  if (value != null) {
-                    setState(() {
-                      _selectedMode = value;
-                    });
-                  }
-                },
+            RadioGroup<AppThemeMode>(
+              groupValue: _selectedMode,
+              onChanged: (value) {
+                if (value != null) {
+                  setState(() {
+                    _selectedMode = value;
+                  });
+                }
+              },
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: AppThemeMode.values.map((mode) {
+                  return RadioListTile<AppThemeMode>(
+                    title: Row(
+                      children: [
+                        Icon(mode.icon, size: 20),
+                        const SizedBox(width: 8),
+                        Text(mode.title),
+                      ],
+                    ),
+                    value: mode,
+                  );
+                }).toList(),
               ),
             ),
             const SizedBox(height: 16),

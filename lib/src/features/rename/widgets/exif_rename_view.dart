@@ -190,7 +190,7 @@ class _ExifRenameViewState extends State<ExifRenameView> {
         ),
         const SizedBox(height: 16),
         DropdownButtonFormField<NumberingType>(
-          value: provider.numberingType,
+          initialValue: provider.numberingType,
           decoration: const InputDecoration(
             labelText: '序号类型',
             border: OutlineInputBorder(),
@@ -255,7 +255,7 @@ class _ExifRenameViewState extends State<ExifRenameView> {
               provider.setFixedDigits(int.tryParse(value) ?? 0),
         ),
         DropdownButtonFormField<NumberingType>(
-          value: provider.numberingType,
+          initialValue: provider.numberingType,
           decoration: const InputDecoration(
             labelText: '序号类型',
             border: OutlineInputBorder(),

@@ -77,7 +77,7 @@ class WatermarkSettings extends StatelessWidget {
             Text('布局类型', style: DesignTokens.headingSmall),
             const SizedBox(height: DesignTokens.spacing12),
             DropdownButtonFormField<WatermarkLayoutType>(
-              value: provider.config.layoutType,
+              initialValue: provider.config.layoutType,
               decoration: DesignTokens.inputDecoration(
                 labelText: '选择布局',
                 hintText: '选择水印布局类型',
@@ -618,7 +618,7 @@ class _ElementSelector extends StatelessWidget {
               child: SizedBox(
                 height: DesignTokens.inputHeight,
                 child: DropdownButtonFormField<WatermarkElementType>(
-                  value: element.type,
+                  initialValue: element.type,
                   decoration: DesignTokens.inputDecoration(),
                   style: DesignTokens.bodyMedium.copyWith(
                     color: DesignTokens.textPrimary,

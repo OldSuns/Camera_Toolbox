@@ -23,23 +23,45 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen>
     with AutomaticKeepAliveClientMixin {
-  final List<Widget> _pages = [
-    const ExifReaderScreen(),
-    const LocalPickerScreen(),
-    const QuickSplitScreen(),
-    const RenameScreen(),
-    const PhotoWatermarkScreen(),
-    const ImageCompressScreen(),
-    const SettingsScreen(),
-    const AboutScreen(),
-  ];
+  final Map<int, Widget> _pageCache = {};
+  final Set<int> _visitedPages = {0};
 
   void _onDestinationSelected(int index) {
+    if (_visitedPages.add(index)) {
+      setState(() {});
+    }
     Provider.of<NavigationProvider>(context, listen: false).setIndex(index);
     if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
       // 从 AppPage 枚举动态获取标题，确保一致性
       windowManager.setTitle('相机工具箱 - ${AppPage.values[index].title}');
     }
+  }
+
+  Widget _buildPage(int index) {
+    switch (index) {
+      case 0:
+        return const ExifReaderScreen();
+      case 1:
+        return const LocalPickerScreen();
+      case 2:
+        return const QuickSplitScreen();
+      case 3:
+        return const RenameScreen();
+      case 4:
+        return const PhotoWatermarkScreen();
+      case 5:
+        return const ImageCompressScreen();
+      case 6:
+        return const SettingsScreen();
+      case 7:
+        return const AboutScreen();
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
+  Widget _pageForIndex(int index) {
+    return _pageCache.putIfAbsent(index, () => _buildPage(index));
   }
 
   @override
@@ -50,12 +72,25 @@ class _HomeScreenState extends State<HomeScreen>
     super.build(context);
     return Consumer<NavigationProvider>(
       builder: (context, navigationProvider, child) {
+        _visitedPages.add(navigationProvider.currentIndex);
         return AdaptiveNavigation(
           currentIndex: navigationProvider.currentIndex,
           onDestinationSelected: _onDestinationSelected,
-          child: IndexedStack(
-            index: navigationProvider.currentIndex,
-            children: _pages,
+          child: Stack(
+            children: List.generate(AppPage.values.length, (index) {
+              if (!_visitedPages.contains(index)) {
+                return const SizedBox.shrink();
+              }
+
+              final isCurrent = navigationProvider.currentIndex == index;
+              return Offstage(
+                offstage: !isCurrent,
+                child: TickerMode(
+                  enabled: isCurrent,
+                  child: _pageForIndex(index),
+                ),
+              );
+            }),
           ),
         );
       },

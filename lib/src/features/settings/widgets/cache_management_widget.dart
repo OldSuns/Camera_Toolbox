@@ -386,24 +386,28 @@ class _CacheManagementWidgetState extends State<CacheManagementWidget> {
           style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
         ),
         const SizedBox(height: 8),
-        ...CacheAutoClearStrategy.values.map(
-          (strategy) => RadioListTile<CacheAutoClearStrategy>(
-            title: Text(strategy.title),
-            subtitle: Text(
-              strategy.description,
-              style: TextStyle(
-                fontSize: 12,
-                color: Theme.of(context).textTheme.bodySmall?.color,
-              ),
-            ),
-            value: strategy,
-            groupValue: _config.autoClearStrategy,
-            onChanged: (value) {
-              if (value != null) {
-                final newConfig = _config.copyWith(autoClearStrategy: value);
-                _updateConfig(newConfig);
-              }
-            },
+        RadioGroup<CacheAutoClearStrategy>(
+          groupValue: _config.autoClearStrategy,
+          onChanged: (value) {
+            if (value != null) {
+              final newConfig = _config.copyWith(autoClearStrategy: value);
+              _updateConfig(newConfig);
+            }
+          },
+          child: Column(
+            children: CacheAutoClearStrategy.values.map((strategy) {
+              return RadioListTile<CacheAutoClearStrategy>(
+                title: Text(strategy.title),
+                subtitle: Text(
+                  strategy.description,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).textTheme.bodySmall?.color,
+                  ),
+                ),
+                value: strategy,
+              );
+            }).toList(),
           ),
         ),
       ],

@@ -188,3 +188,11 @@ class LocalPickerExportResult {
     required this.issues,
   });
 }
+
+@immutable
+class LocalPickerUserMessage {
+  final int id;
+  final String message;
+
+  const LocalPickerUserMessage({required this.id, required this.message});
+}

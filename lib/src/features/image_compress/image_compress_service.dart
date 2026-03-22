@@ -132,6 +132,7 @@ class _CompressionTask {
 
 /// Isolate 压缩结果
 class _CompressionResult {
+  final String filePath;
   final String fileName;
   final bool success;
   final String? errorMessage;
@@ -141,6 +142,7 @@ class _CompressionResult {
   final Uint8List? compressedBytes;
 
   _CompressionResult({
+    required this.filePath,
     required this.fileName,
     required this.success,
     this.errorMessage,
@@ -230,6 +232,7 @@ class ImageCompressService extends ChangeNotifier {
           }
         } else if (message is Map<String, dynamic>) {
           final result = _CompressionResult(
+            filePath: message['filePath'] as String? ?? '',
             fileName: message['fileName'] as String,
             success: message['success'] as bool,
             errorMessage: message['errorMessage'] as String?,
@@ -239,8 +242,8 @@ class ImageCompressService extends ChangeNotifier {
             compressedBytes: message['compressedBytes'] as Uint8List?,
           );
           _processingCount--;
-          _processingFiles.remove(result.fileName);
-          _handleCompressionResult(result);
+          _processingFiles.remove(result.filePath);
+          unawaited(_handleCompressionResult(result));
           _processNextTask();
         }
       });
@@ -353,9 +356,9 @@ class ImageCompressService extends ChangeNotifier {
   }
 
   /// 处理压缩结果
-  void _handleCompressionResult(_CompressionResult result) async {
+  Future<void> _handleCompressionResult(_CompressionResult result) async {
     final imageIndex = _selectedImages.indexWhere(
-      (img) => img.name == result.fileName,
+      (img) => img.filePath == result.filePath,
     );
 
     if (imageIndex != -1) {
@@ -436,12 +439,12 @@ class ImageCompressService extends ChangeNotifier {
     }
 
     final task = _taskQueue.removeAt(0);
-    if (_processingFiles.contains(task.fileName)) {
+    if (_processingFiles.contains(task.filePath)) {
       // 避免重复处理
       return;
     }
 
-    _processingFiles.add(task.fileName);
+    _processingFiles.add(task.filePath);
     _processingCount++;
 
     // 轮询选择 Isolate
@@ -468,7 +471,7 @@ class ImageCompressService extends ChangeNotifier {
 
     // 更新对应图片的状态为正在压缩
     final imageIndex = _selectedImages.indexWhere(
-      (img) => img.name == task.fileName,
+      (img) => img.filePath == task.filePath,
     );
     if (imageIndex != -1) {
       _selectedImages[imageIndex] = _selectedImages[imageIndex].copyWith(
@@ -645,6 +648,39 @@ class ImageCompressService extends ChangeNotifier {
     notifyListeners();
   }
 
+  @visibleForTesting
+  void replaceSelectedImagesForTesting(List<ImageFile> images) {
+    _selectedImages
+      ..clear()
+      ..addAll(images);
+    notifyListeners();
+  }
+
+  @visibleForTesting
+  Future<void> applyCompressionResultForTesting({
+    required String filePath,
+    required String fileName,
+    required bool success,
+    String? errorMessage,
+    String? compressedFilePath,
+    int? compressedSize,
+    bool skipped = false,
+    Uint8List? compressedBytes,
+  }) {
+    return _handleCompressionResult(
+      _CompressionResult(
+        filePath: filePath,
+        fileName: fileName,
+        success: success,
+        errorMessage: errorMessage,
+        compressedFilePath: compressedFilePath,
+        compressedSize: compressedSize,
+        skipped: skipped,
+        compressedBytes: compressedBytes,
+      ),
+    );
+  }
+
   /// 排序图片
   void sortImages(int columnIndex, bool ascending) {
     _selectedImages.sort((a, b) {
@@ -764,6 +800,7 @@ class ImageCompressService extends ChangeNotifier {
       // 发送错误消息
       try {
         sendPort.send({
+          'filePath': '',
           'fileName': 'system',
           'success': false,
           'errorMessage': '初始化压缩库失败: $e',
@@ -813,6 +850,7 @@ class ImageCompressService extends ChangeNotifier {
             if (result['success'] as bool) {
               try {
                 sendPort.send({
+                  'filePath': filePath,
                   'fileName': fileName,
                   'success': true,
                   'compressedFilePath': result['outputPath'] as String,
@@ -826,6 +864,7 @@ class ImageCompressService extends ChangeNotifier {
             } else {
               try {
                 sendPort.send({
+                  'filePath': filePath,
                   'fileName': fileName,
                   'success': false,
                   'errorMessage': result['error'] as String,
@@ -837,6 +876,7 @@ class ImageCompressService extends ChangeNotifier {
           } catch (e) {
             try {
               sendPort.send({
+                'filePath': filePath,
                 'fileName': fileName,
                 'success': false,
                 'errorMessage': '压缩失败: $e',

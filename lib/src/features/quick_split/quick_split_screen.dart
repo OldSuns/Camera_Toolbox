@@ -16,8 +16,6 @@ class QuickSplitScreen extends StatefulWidget {
 }
 
 class _QuickSplitScreenState extends State<QuickSplitScreen> {
-  final _quickSplitService = QuickSplitService();
-
   String? _jpgDirectory;
   String? _rawDirectory;
   String? _outputDirectory;
@@ -25,6 +23,23 @@ class _QuickSplitScreenState extends State<QuickSplitScreen> {
   bool _isProcessing = false;
   double _progress = 0.0;
   String _statusText = '准备就绪';
+  ReceivePort? _receivePort;
+  Isolate? _workerIsolate;
+  SendPort? _workerSendPort;
+  bool _cancelRequested = false;
+
+  static const String _messageTypeReady = 'ready';
+  static const String _messageTypeProgress = 'progress';
+  static const String _messageTypeDone = 'done';
+  static const String _messageTypeCancelled = 'cancelled';
+  static const String _messageTypeError = 'error';
+  static const String _commandTypeCancel = 'cancel';
+
+  @override
+  void dispose() {
+    _disposeWorker();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -230,7 +245,10 @@ class _QuickSplitScreenState extends State<QuickSplitScreen> {
       _statusText = '正在初始化...';
     });
 
+    _disposeWorker();
+    _cancelRequested = false;
     final receivePort = ReceivePort();
+    _receivePort = receivePort;
     final isolate = await Isolate.spawn(_processingIsolate, {
       'sendPort': receivePort.sendPort,
       'jpgDirectory': _jpgDirectory!,
@@ -238,46 +256,65 @@ class _QuickSplitScreenState extends State<QuickSplitScreen> {
       'outputDirectory': _outputDirectory!,
       'conflictAction': conflictAction,
     });
+    _workerIsolate = isolate;
 
     receivePort.listen((data) {
-      if (data is Map) {
-        final processed = data['processed'] as int;
-        final total = data['total'] as int;
-        if (mounted) {
-          setState(() {
-            _progress = total > 0 ? processed / total : 0.0;
-            _statusText = '处理中... $processed/$total';
-          });
-        }
-      } else if (data is String && data == 'done') {
-        if (mounted) {
-          setState(() {
-            _statusText = '处理完成！';
-            _isProcessing = false;
-          });
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('快速分片处理完成！'),
-              backgroundColor: Colors.green,
-            ),
-          );
-        }
-        receivePort.close();
-        isolate.kill();
-      } else if (data is QuickSplitException) {
-        if (mounted) {
-          _showErrorDialog('处理失败', data.message);
-          setState(() => _isProcessing = false);
-        }
-        receivePort.close();
-        isolate.kill();
-      } else if (data is Exception) {
-        if (mounted) {
-          _showErrorDialog('发生未知错误', data.toString());
-          setState(() => _isProcessing = false);
-        }
-        receivePort.close();
-        isolate.kill();
+      if (data is! Map) {
+        return;
+      }
+
+      final type = data['type'];
+      switch (type) {
+        case _messageTypeReady:
+          _workerSendPort = data['sendPort'] as SendPort?;
+          if (_cancelRequested) {
+            _workerSendPort?.send({'type': _commandTypeCancel});
+          }
+          break;
+        case _messageTypeProgress:
+          final processed = data['processed'] as int;
+          final total = data['total'] as int;
+          if (mounted) {
+            setState(() {
+              _progress = total > 0 ? processed / total : 0.0;
+              _statusText = '处理中... $processed/$total';
+            });
+          }
+          break;
+        case _messageTypeDone:
+          if (mounted) {
+            setState(() {
+              _statusText = '处理完成！';
+              _isProcessing = false;
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('快速分片处理完成！'),
+                backgroundColor: Colors.green,
+              ),
+            );
+          }
+          _disposeWorker();
+          break;
+        case _messageTypeCancelled:
+          if (mounted) {
+            setState(() {
+              _statusText = '已取消';
+              _isProcessing = false;
+            });
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('快速分片已取消')));
+          }
+          _disposeWorker();
+          break;
+        case _messageTypeError:
+          if (mounted) {
+            _showErrorDialog('处理失败', (data['message'] as String?) ?? '发生未知错误');
+            setState(() => _isProcessing = false);
+          }
+          _disposeWorker();
+          break;
       }
     });
   }
@@ -307,11 +344,10 @@ class _QuickSplitScreenState extends State<QuickSplitScreen> {
   }
 
   void _cancelProcessing() {
-    _quickSplitService.cancel();
+    _cancelRequested = true;
+    _workerSendPort?.send({'type': _commandTypeCancel});
     setState(() {
-      _isProcessing = false;
-      _progress = 0.0;
-      _statusText = '已取消';
+      _statusText = '正在取消...';
     });
   }
 
@@ -329,6 +365,15 @@ class _QuickSplitScreenState extends State<QuickSplitScreen> {
         ],
       ),
     );
+  }
+
+  void _disposeWorker() {
+    _receivePort?.close();
+    _receivePort = null;
+    _workerSendPort = null;
+    _cancelRequested = false;
+    _workerIsolate?.kill(priority: Isolate.immediate);
+    _workerIsolate = null;
   }
 
   void _showHelpDialog() {
@@ -381,6 +426,18 @@ void _processingIsolate(Map<String, dynamic> context) async {
   final conflictAction = context['conflictAction'] as ConflictAction;
 
   final quickSplitService = QuickSplitService();
+  final controlPort = ReceivePort();
+  sendPort.send({
+    'type': _QuickSplitScreenState._messageTypeReady,
+    'sendPort': controlPort.sendPort,
+  });
+
+  controlPort.listen((dynamic message) {
+    if (message is Map<String, dynamic> &&
+        message['type'] == _QuickSplitScreenState._commandTypeCancel) {
+      quickSplitService.cancel();
+    }
+  });
 
   try {
     await quickSplitService.processFiles(
@@ -389,11 +446,22 @@ void _processingIsolate(Map<String, dynamic> context) async {
       outputDirectory: outputDirectory,
       conflictAction: conflictAction,
       onProgress: (processed, total) {
-        sendPort.send({'processed': processed, 'total': total});
+        sendPort.send({
+          'type': _QuickSplitScreenState._messageTypeProgress,
+          'processed': processed,
+          'total': total,
+        });
       },
     );
-    sendPort.send('done');
+    sendPort.send({'type': _QuickSplitScreenState._messageTypeDone});
+  } on QuickSplitCancelledException {
+    sendPort.send({'type': _QuickSplitScreenState._messageTypeCancelled});
   } catch (e) {
-    sendPort.send(e);
+    sendPort.send({
+      'type': _QuickSplitScreenState._messageTypeError,
+      'message': e.toString(),
+    });
+  } finally {
+    controlPort.close();
   }
 }
