@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../config/theme_config.dart';
 import '../../shared/providers/theme_provider.dart';
+import '../../shared/widgets/feature_page_layout.dart';
 import 'theme_settings_dialog.dart';
 import 'cache_management_screen.dart';
 
@@ -13,9 +14,9 @@ class SettingsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final themeProvider = context.watch<ThemeProvider>();
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('设置')),
-      body: ListView(
+    return FeaturePageLayout(
+      title: '设置',
+      child: ListView(
         children: [
           ListTile(
             leading: const Icon(Icons.palette),

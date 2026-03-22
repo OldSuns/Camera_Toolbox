@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import 'exif_data.dart';
 import 'exif_service.dart';
 import '../../shared/services/image_picker_service.dart';
+import '../../shared/widgets/feature_page_layout.dart';
 import 'exif_display.dart';
 
 /// ExifReaderScreen - A feature-rich screen for reading EXIF data from images.
@@ -169,33 +170,32 @@ class _ExifReaderScreenState extends State<ExifReaderScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('图片EXIF信息阅读器'),
-        actions: [
-          if (_exifData != null)
-            IconButton(
-              icon: const Icon(Icons.share),
-              onPressed: _shareExifInfo,
-              tooltip: '分享EXIF信息',
-            ),
+    return FeaturePageLayout(
+      title: '图片EXIF信息阅读器',
+      actions: [
+        FilledButton.icon(
+          onPressed: _isLoading ? null : _selectImage,
+          icon: const Icon(Icons.add_photo_alternate),
+          label: const Text('选择图片'),
+        ),
+        if (_exifData != null)
           IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _clearSelection,
-            tooltip: '清除选择',
+            icon: const Icon(Icons.share),
+            onPressed: _shareExifInfo,
+            tooltip: '分享EXIF信息',
           ),
-          IconButton(
-            icon: const Icon(Icons.info_outline),
-            onPressed: _showInfoDialog,
-            tooltip: '功能说明',
-          ),
-        ],
-      ),
-      body: _buildBody(),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _selectImage,
-        child: const Icon(Icons.add_photo_alternate),
-      ),
+        IconButton(
+          icon: const Icon(Icons.refresh),
+          onPressed: _clearSelection,
+          tooltip: '清除选择',
+        ),
+        IconButton(
+          icon: const Icon(Icons.info_outline),
+          onPressed: _showInfoDialog,
+          tooltip: '功能说明',
+        ),
+      ],
+      child: _buildBody(),
     );
   }
 

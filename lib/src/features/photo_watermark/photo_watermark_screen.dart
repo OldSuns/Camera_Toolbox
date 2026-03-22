@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:image_picker/image_picker.dart';
+import '../../shared/widgets/feature_page_layout.dart';
 import '../../shared/widgets/responsive_layout.dart';
 import 'photo_watermark_provider.dart';
 import 'widgets/watermark_preview.dart';
@@ -91,79 +92,78 @@ class _PhotoWatermarkScreenState extends State<PhotoWatermarkScreen> {
       resolve: (width) => width > kDesktopLayoutBreakpoint,
       cacheKey: (tabCount, _isDragging, _isRightPanelCollapsed),
       builder: (context, isDesktop) {
+        final actions = <Widget>[
+          if (isDesktop &&
+              (Platform.isWindows || Platform.isMacOS || Platform.isLinux))
+            ...[
+              _PhotoWatermarkOutputDirectoryButton(
+                onPressed: _pickOutputDirectory,
+              ),
+              IconButton(
+                onPressed: () {
+                  context.read<PhotoWatermarkProvider>().openOutputDirectory();
+                },
+                icon: const Icon(Icons.launch),
+                tooltip: '打开输出目录',
+              ),
+            ],
+        ];
+
         return DefaultTabController(
           key: ValueKey<int>(tabCount),
           length: tabCount,
-          child: Scaffold(
+          child: FeaturePageLayout(
+            title: '照片边框水印',
             backgroundColor: DesignTokens.backgroundPrimary,
-            appBar: AppBar(
-              title: const Text('照片边框水印'),
-              elevation: 0,
-              backgroundColor: DesignTokens.backgroundSecondary,
-              actions: [
-                if (Platform.isWindows ||
-                    Platform.isMacOS ||
-                    Platform.isLinux) ...[
-                  _PhotoWatermarkOutputDirectoryButton(
-                    onPressed: _pickOutputDirectory,
+            actions: actions,
+            child: Column(
+              children: [
+                if (!isDesktop)
+                  TabBar(
+                    tabs: [
+                      const Tab(icon: Icon(Icons.settings), text: '设置'),
+                      const Tab(icon: Icon(Icons.preview), text: '预览'),
+                      if (hasBatchTasks)
+                        const Tab(icon: Icon(Icons.view_list), text: '批处理'),
+                    ],
                   ),
-                  const SizedBox(width: DesignTokens.spacing8),
-                  IconButton(
-                    onPressed: () {
-                      context
-                          .read<PhotoWatermarkProvider>()
-                          .openOutputDirectory();
+                Expanded(
+                  child: DropTarget(
+                    onDragDone: (details) async {
+                      debugPrint('拖拽文件数量: ${details.files.length}');
+                      final files = details.files
+                          .where((f) {
+                            final extension = f.path.toLowerCase();
+                            return extension.endsWith('.jpg') ||
+                                extension.endsWith('.jpeg') ||
+                                extension.endsWith('.png') ||
+                                extension.endsWith('.heic') ||
+                                extension.endsWith('.heif');
+                          })
+                          .map((f) => File(f.path))
+                          .toList();
+                      if (files.isNotEmpty && mounted) {
+                        final provider = context.read<PhotoWatermarkProvider>();
+                        if (files.length == 1) {
+                          await provider.loadImage(files.first);
+                        } else {
+                          await provider.addBatchFiles(files);
+                        }
+                      }
                     },
-                    icon: const Icon(Icons.launch),
-                    tooltip: '打开输出目录',
-                  ),
-                ],
-                const SizedBox(width: DesignTokens.spacing16),
-              ],
-              bottom: isDesktop
-                  ? null
-                  : TabBar(
-                      tabs: [
-                        const Tab(icon: Icon(Icons.settings), text: '设置'),
-                        const Tab(icon: Icon(Icons.preview), text: '预览'),
-                        if (hasBatchTasks)
-                          const Tab(icon: Icon(Icons.view_list), text: '批处理'),
+                    onDragEntered: (_) => setState(() => _isDragging = true),
+                    onDragExited: (_) => setState(() => _isDragging = false),
+                    child: Stack(
+                      children: [
+                        isDesktop
+                            ? _buildDesktopLayout(hasBatchTasks: hasBatchTasks)
+                            : _buildMobileLayout(hasBatchTasks),
+                        if (_isDragging) const _PhotoWatermarkDragOverlay(),
                       ],
                     ),
-            ),
-            body: DropTarget(
-              onDragDone: (details) async {
-                debugPrint('拖拽文件数量: ${details.files.length}');
-                final files = details.files
-                    .where((f) {
-                      final extension = f.path.toLowerCase();
-                      return extension.endsWith('.jpg') ||
-                          extension.endsWith('.jpeg') ||
-                          extension.endsWith('.png') ||
-                          extension.endsWith('.heic') ||
-                          extension.endsWith('.heif');
-                    })
-                    .map((f) => File(f.path))
-                    .toList();
-                if (files.isNotEmpty && mounted) {
-                  final provider = context.read<PhotoWatermarkProvider>();
-                  if (files.length == 1) {
-                    await provider.loadImage(files.first);
-                  } else {
-                    await provider.addBatchFiles(files);
-                  }
-                }
-              },
-              onDragEntered: (_) => setState(() => _isDragging = true),
-              onDragExited: (_) => setState(() => _isDragging = false),
-              child: Stack(
-                children: [
-                  isDesktop
-                      ? _buildDesktopLayout(hasBatchTasks: hasBatchTasks)
-                      : _buildMobileLayout(hasBatchTasks),
-                  if (_isDragging) const _PhotoWatermarkDragOverlay(),
-                ],
-              ),
+                  ),
+                ),
+              ],
             ),
           ),
         );

@@ -10,6 +10,7 @@ import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
 import '../../shared/utils/conflict_action.dart';
+import '../../shared/widgets/feature_page_layout.dart';
 import '../../shared/widgets/responsive_layout.dart';
 import 'local_picker_provider.dart';
 
@@ -132,17 +133,16 @@ class _LocalPickerViewState extends State<_LocalPickerView> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const _LocalPickerAppBarTitle(),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.help_outline),
-            onPressed: () => _showHelpDialog(context),
-          ),
-        ],
-      ),
-      body: Column(
+    return FeaturePageLayout(
+      title: '本地选片',
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.help_outline),
+          onPressed: () => _showHelpDialog(context),
+          tooltip: '帮助',
+        ),
+      ],
+      child: Column(
         children: [
           StableWidthBuilder<bool>(
             resolve: (width) => width < _localPickerCompactBreakpoint,
@@ -1581,18 +1581,6 @@ class _ThumbnailViewState extends State<ThumbnailView> {
         );
       },
     );
-  }
-}
-
-class _LocalPickerAppBarTitle extends StatelessWidget {
-  const _LocalPickerAppBarTitle();
-
-  @override
-  Widget build(BuildContext context) {
-    final isInitialLoading = context.select<LocalPickerProvider, bool>(
-      (provider) => provider.isLoading && provider.totalImageCount == 0,
-    );
-    return Text(isInitialLoading ? '正在加载图片...' : '本地选片');
   }
 }
 

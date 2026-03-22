@@ -27,9 +27,7 @@ class _HomeScreenState extends State<HomeScreen>
   final Set<int> _visitedPages = {0};
 
   void _onDestinationSelected(int index) {
-    if (_visitedPages.add(index)) {
-      setState(() {});
-    }
+    _visitedPages.add(index);
     Provider.of<NavigationProvider>(context, listen: false).setIndex(index);
     if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
       // 从 AppPage 枚举动态获取标题，确保一致性
@@ -72,7 +70,6 @@ class _HomeScreenState extends State<HomeScreen>
     super.build(context);
     return Consumer<NavigationProvider>(
       builder: (context, navigationProvider, child) {
-        _visitedPages.add(navigationProvider.currentIndex);
         return AdaptiveNavigation(
           currentIndex: navigationProvider.currentIndex,
           onDestinationSelected: _onDestinationSelected,
@@ -83,8 +80,13 @@ class _HomeScreenState extends State<HomeScreen>
               }
 
               final isCurrent = navigationProvider.currentIndex == index;
-              return Offstage(
-                offstage: !isCurrent,
+              return Visibility(
+                visible: isCurrent,
+                maintainState: true,
+                maintainAnimation: true,
+                maintainSize: false,
+                maintainSemantics: false,
+                maintainInteractivity: false,
                 child: TickerMode(
                   enabled: isCurrent,
                   child: _pageForIndex(index),

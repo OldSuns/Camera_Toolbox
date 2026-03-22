@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../shared/services/file_selector_service.dart';
 import '../../shared/utils/conflict_action.dart';
+import '../../shared/widgets/feature_page_layout.dart';
 import 'quick_split_exception.dart';
 import 'quick_split_service.dart';
 
@@ -43,17 +44,16 @@ class _QuickSplitScreenState extends State<QuickSplitScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('快速分片'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.help_outline),
-            onPressed: _showHelpDialog,
-          ),
-        ],
-      ),
-      body: Padding(
+    return FeaturePageLayout(
+      title: '快速分片',
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.help_outline),
+          onPressed: _showHelpDialog,
+          tooltip: '帮助',
+        ),
+      ],
+      child: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,

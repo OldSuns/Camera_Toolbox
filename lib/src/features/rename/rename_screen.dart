@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
+import '../../shared/widgets/feature_page_layout.dart';
 import 'rename_provider.dart';
 import 'widgets/append_rename_view.dart';
 import 'widgets/auto_numbering_view.dart';
@@ -51,8 +52,9 @@ class _RenameScreenState extends State<RenameScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: LayoutBuilder(
+    return FeaturePageLayout(
+      title: '批量重命名',
+      child: LayoutBuilder(
         builder: (context, constraints) {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,

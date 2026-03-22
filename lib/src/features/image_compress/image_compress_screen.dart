@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:data_table_2/data_table_2.dart';
 import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
+import '../../shared/widgets/feature_page_layout.dart';
 import '../../shared/widgets/responsive_layout.dart';
 import 'image_compress_service.dart';
 
@@ -101,31 +102,30 @@ class _ImageCompressScreenState extends State<ImageCompressScreen> {
   Widget build(BuildContext context) {
     return ChangeNotifierProvider.value(
       value: _service,
-      child: StableWidthBuilder<bool>(
-        resolve: (width) => width > kDesktopLayoutBreakpoint,
-        cacheKey: (
-          _quality.round(),
-          _outputToOriginalDir,
-          _selectedOutputDirectory,
-          _overwriteOriginal,
-          _sortColumnIndex,
-          _sortAscending,
-          _selectedRowsDigest,
-        ),
-        builder: (context, isDesktop) {
-          if (isDesktop) {
-            return Scaffold(
-              body: Padding(
+      child: FeaturePageLayout(
+        title: '图像压缩',
+        child: StableWidthBuilder<bool>(
+          resolve: (width) => width > kDesktopLayoutBreakpoint,
+          cacheKey: (
+            _quality.round(),
+            _outputToOriginalDir,
+            _selectedOutputDirectory,
+            _overwriteOriginal,
+            _sortColumnIndex,
+            _sortAscending,
+            _selectedRowsDigest,
+          ),
+          builder: (context, isDesktop) {
+            if (isDesktop) {
+              return Padding(
                 padding: const EdgeInsets.all(16),
                 child: _buildDesktopLayout(),
-              ),
-            );
-          }
+              );
+            }
 
-          return DefaultTabController(
-            length: 2,
-            child: Scaffold(
-              body: Column(
+            return DefaultTabController(
+              length: 2,
+              child: Column(
                 children: [
                   const Material(
                     child: TabBar(
@@ -143,9 +143,9 @@ class _ImageCompressScreenState extends State<ImageCompressScreen> {
                   ),
                 ],
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }

@@ -1050,7 +1050,7 @@ class LocalPickerProvider with ChangeNotifier {
 
           await _copyWithConflictAction(
             sourcePath: entry.path,
-            targetPath: imageTargetPath!,
+            targetPath: imageTargetPath,
             action: options.conflictAction,
           );
           existingFileNames.add(resolved.imageFileName!);
@@ -1352,5 +1352,6 @@ class LocalPickerProvider with ChangeNotifier {
     notifyListeners();
   }
 }
+
 
 

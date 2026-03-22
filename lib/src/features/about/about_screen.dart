@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../shared/widgets/feature_page_layout.dart';
 import '../../shared/services/version_check_service.dart';
 
 /// 关于页面
@@ -21,7 +22,11 @@ class _AboutScreenState extends State<AboutScreen> {
   @override
   void initState() {
     super.initState();
-    _checkForUpdates();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _checkForUpdates();
+      }
+    });
   }
 
   /// 格式化时间显示
@@ -133,9 +138,9 @@ class _AboutScreenState extends State<AboutScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('关于')),
-      body: Center(
+    return FeaturePageLayout(
+      title: '关于',
+      child: Center(
         child: Padding(
           padding: const EdgeInsets.all(24.0),
           child: Column(
