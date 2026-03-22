@@ -11,73 +11,66 @@ class WatermarkPreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<PhotoWatermarkProvider>(
-      builder: (context, provider, _) {
-        if (provider.previewImage == null) {
-          return const Center(child: CircularProgressIndicator());
-        }
+    final previewImage = context.select<PhotoWatermarkProvider, ui.Image?>(
+      (provider) => provider.previewImage,
+    );
 
-        // 添加调试信息
-        final previewImage = provider.previewImage!;
-        if (previewImage.width <= 0 || previewImage.height <= 0) {
-          return const Center(child: Text('图像尺寸无效'));
-        }
+    if (previewImage == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
 
-        return Container(
-          color: DesignTokens.backgroundPrimary,
-          child: Center(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                // 计算缩放比例以适应预览窗口
-                final imageWidth = previewImage.width.toDouble();
-                final imageHeight = previewImage.height.toDouble();
-                final containerWidth = constraints.maxWidth;
-                final containerHeight = constraints.maxHeight;
+    if (previewImage.width <= 0 || previewImage.height <= 0) {
+      return const Center(child: Text('图像尺寸无效'));
+    }
 
-                // 计算缩放比例
-                final scaleX = containerWidth / imageWidth;
-                final scaleY = containerHeight / imageHeight;
-                final scale = math.min(scaleX, scaleY) * 0.95; // 留出一些边距
+    return RepaintBoundary(
+      child: Container(
+        color: DesignTokens.backgroundPrimary,
+        child: Center(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final imageWidth = previewImage.width.toDouble();
+              final imageHeight = previewImage.height.toDouble();
+              final containerWidth = constraints.maxWidth;
+              final containerHeight = constraints.maxHeight;
 
-                // 计算缩放后的尺寸
-                final scaledWidth = imageWidth * scale;
-                final scaledHeight = imageHeight * scale;
+              final scaleX = containerWidth / imageWidth;
+              final scaleY = containerHeight / imageHeight;
+              final scale = math.min(scaleX, scaleY) * 0.95;
 
-                // 添加调试信息
-                if (scaledWidth <= 0 || scaledHeight <= 0) {
-                  return const Center(child: Text('缩放后尺寸无效'));
-                }
+              final scaledWidth = imageWidth * scale;
+              final scaledHeight = imageHeight * scale;
 
-                // 使用InteractiveViewer支持缩放和平移
-                return InteractiveViewer(
-                  minScale: 0.1,
-                  maxScale: 5.0,
-                  child: Container(
-                    width: scaledWidth,
-                    height: scaledHeight,
-                    decoration: BoxDecoration(
-                      boxShadow: DesignTokens.shadowLarge,
-                    ),
-                    child: Stack(
-                      children: [
-                        // 棋盘背景
-                        Positioned.fill(
-                          child: CustomPaint(painter: _CheckerboardPainter()),
-                        ),
-                        // 图像
-                        CustomPaint(
-                          size: Size(scaledWidth, scaledHeight),
-                          painter: _ImagePainter(previewImage),
-                        ),
-                      ],
-                    ),
+              if (scaledWidth <= 0 || scaledHeight <= 0) {
+                return const Center(child: Text('缩放后尺寸无效'));
+              }
+
+              return InteractiveViewer(
+                minScale: 0.1,
+                maxScale: 5.0,
+                child: Container(
+                  width: scaledWidth,
+                  height: scaledHeight,
+                  decoration: BoxDecoration(
+                    boxShadow: DesignTokens.shadowLarge,
                   ),
-                );
-              },
-            ),
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child: CustomPaint(painter: _CheckerboardPainter()),
+                      ),
+                      CustomPaint(
+                        size: Size(scaledWidth, scaledHeight),
+                        painter: _ImagePainter(previewImage),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 }

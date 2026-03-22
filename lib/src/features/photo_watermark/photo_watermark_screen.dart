@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:image_picker/image_picker.dart';
+import '../../shared/widgets/responsive_layout.dart';
 import 'photo_watermark_provider.dart';
 import 'widgets/watermark_preview.dart';
 import 'widgets/watermark_settings.dart';
@@ -81,13 +82,15 @@ class _PhotoWatermarkScreenState extends State<PhotoWatermarkScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final isDesktop = constraints.maxWidth > kDesktopLayoutBreakpoint;
-        final provider = context.watch<PhotoWatermarkProvider>();
-        final hasBatchTasks = provider.batchTasks.isNotEmpty;
-        final tabCount = hasBatchTasks ? 3 : 2;
+    final hasBatchTasks = context.select<PhotoWatermarkProvider, bool>(
+      (provider) => provider.batchTasks.isNotEmpty,
+    );
+    final tabCount = hasBatchTasks ? 3 : 2;
 
+    return StableWidthBuilder<bool>(
+      resolve: (width) => width > kDesktopLayoutBreakpoint,
+      cacheKey: (tabCount, _isDragging, _isRightPanelCollapsed),
+      builder: (context, isDesktop) {
         return DefaultTabController(
           key: ValueKey<int>(tabCount),
           length: tabCount,
@@ -98,27 +101,11 @@ class _PhotoWatermarkScreenState extends State<PhotoWatermarkScreen> {
               elevation: 0,
               backgroundColor: DesignTokens.backgroundSecondary,
               actions: [
-                // Desktop-only buttons
                 if (Platform.isWindows || Platform.isLinux) ...[
-                  // 输出目录按钮
-                  Consumer<PhotoWatermarkProvider>(
-                    builder: (context, provider, _) {
-                      return TextButton.icon(
-                        onPressed: _pickOutputDirectory,
-                        icon: const Icon(Icons.folder_open),
-                        label: Text(
-                          provider.outputDirectory?.path
-                                  .split(Platform.pathSeparator)
-                                  .last ??
-                              '选择输出目录',
-                          style: DesignTokens.bodySmall,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      );
-                    },
+                  _PhotoWatermarkOutputDirectoryButton(
+                    onPressed: _pickOutputDirectory,
                   ),
                   const SizedBox(width: DesignTokens.spacing8),
-                  // 打开输出目录
                   IconButton(
                     onPressed: () {
                       context
@@ -170,39 +157,9 @@ class _PhotoWatermarkScreenState extends State<PhotoWatermarkScreen> {
               child: Stack(
                 children: [
                   isDesktop
-                      ? _buildDesktopLayout()
+                      ? _buildDesktopLayout(hasBatchTasks: hasBatchTasks)
                       : _buildMobileLayout(hasBatchTasks),
-                  if (_isDragging)
-                    Container(
-                      color: Theme.of(context).primaryColor.withAlpha(25),
-                      child: Center(
-                        child: Container(
-                          padding: const EdgeInsets.all(DesignTokens.spacing32),
-                          decoration: BoxDecoration(
-                            color: DesignTokens.backgroundSecondary,
-                            borderRadius: BorderRadius.circular(
-                              DesignTokens.radiusXLarge,
-                            ),
-                            boxShadow: DesignTokens.shadowXLarge,
-                          ),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.file_download,
-                                size: 64,
-                                color: Theme.of(context).primaryColor,
-                              ),
-                              const SizedBox(height: DesignTokens.spacing16),
-                              const Text(
-                                '释放以添加图片',
-                                style: DesignTokens.headingMedium,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
+                  if (_isDragging) const _PhotoWatermarkDragOverlay(),
                 ],
               ),
             ),
@@ -213,7 +170,7 @@ class _PhotoWatermarkScreenState extends State<PhotoWatermarkScreen> {
   }
 
   /// 构建桌面端布局
-  Widget _buildDesktopLayout() {
+  Widget _buildDesktopLayout({required bool hasBatchTasks}) {
     return Row(
       children: [
         // 左侧：设置面板
@@ -221,9 +178,9 @@ class _PhotoWatermarkScreenState extends State<PhotoWatermarkScreen> {
         // 中间：预览区域
         Expanded(flex: 2, child: _buildCenterPanel()),
         // 收起/展开按钮
-        _buildCollapseButton(),
+        _buildCollapseButton(hasBatchTasks: hasBatchTasks),
         // 右侧：批处理队列
-        _buildRightPanel(),
+        _buildRightPanel(hasBatchTasks: hasBatchTasks),
       ],
     );
   }
@@ -233,150 +190,43 @@ class _PhotoWatermarkScreenState extends State<PhotoWatermarkScreen> {
     final List<Widget> children = [
       _buildLeftPanel(isMobile: true),
       _buildCenterPanel(),
-      if (hasBatchTasks) _buildRightPanel(isMobile: true),
+      if (hasBatchTasks) _buildRightPanel(isMobile: true, hasBatchTasks: true),
     ];
     return TabBarView(children: children);
   }
 
   /// 构建左侧设置面板
   Widget _buildLeftPanel({bool isMobile = false}) {
-    final panelContent = Consumer<PhotoWatermarkProvider>(
-      builder: (context, provider, _) {
-        return Column(
-          children: [
-            // 工具栏
-            Container(
-              padding: const EdgeInsets.all(DesignTokens.spacing16),
-              decoration: BoxDecoration(
-                border: Border(
-                  bottom: BorderSide(color: DesignTokens.borderColorLight),
-                ),
-              ),
-              child: Column(
-                children: [
-                  // 选择图片按钮
-                  ElevatedButton.icon(
-                    onPressed: () => _pickFiles(multiple: false),
-                    icon: const Icon(Icons.add_photo_alternate),
-                    label: const Text('选择图片'),
-                    style: DesignTokens.primaryButtonStyle,
-                  ),
-                  const SizedBox(height: DesignTokens.spacing8),
-                  // 添加批量按钮
-                  OutlinedButton.icon(
-                    onPressed: () => _pickFiles(multiple: true),
-                    icon: const Icon(Icons.collections),
-                    label: const Text('批量添加'),
-                    style: DesignTokens.secondaryButtonStyle,
-                  ),
-                ],
-              ),
+    final panelContent = Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(DesignTokens.spacing16),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(color: DesignTokens.borderColorLight),
             ),
-            // 设置面板
-            const Expanded(child: WatermarkSettings()),
-            // 底部操作按钮
-            Container(
-              padding: const EdgeInsets.all(DesignTokens.spacing16),
-              decoration: BoxDecoration(
-                border: Border(
-                  top: BorderSide(color: DesignTokens.borderColorLight),
-                ),
+          ),
+          child: Column(
+            children: [
+              ElevatedButton.icon(
+                onPressed: () => _pickFiles(multiple: false),
+                icon: const Icon(Icons.add_photo_alternate),
+                label: const Text('选择图片'),
+                style: DesignTokens.primaryButtonStyle,
               ),
-              child: Column(
-                children: [
-                  // 预览按钮
-                  ElevatedButton.icon(
-                    onPressed:
-                        provider.currentImage != null &&
-                            provider.needsPreviewGeneration &&
-                            provider.status != ProcessingStatus.processing
-                        ? () => provider.generatePreviewManually()
-                        : null,
-                    icon:
-                        provider.status == ProcessingStatus.processing &&
-                            !provider.needsPreviewGeneration
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Icon(Icons.visibility),
-                    label: Text(
-                      provider.status == ProcessingStatus.processing &&
-                              !provider.needsPreviewGeneration
-                          ? '生成中...'
-                          : '生成预览',
-                    ),
-                    style: DesignTokens.primaryButtonStyle,
-                  ),
-                  const SizedBox(height: DesignTokens.spacing12),
-                  // 保存按钮
-                  ElevatedButton.icon(
-                    onPressed:
-                        provider.currentImage != null &&
-                            provider.previewImage != null &&
-                            provider.status != ProcessingStatus.processing
-                        ? () => provider.saveCurrentImage()
-                        : null,
-                    icon: provider.status == ProcessingStatus.processing
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Icon(Icons.save),
-                    label: Text(
-                      provider.status == ProcessingStatus.processing
-                          ? '处理中...'
-                          : '保存图片',
-                    ),
-                    style: DesignTokens.primaryButtonStyle.copyWith(
-                      backgroundColor: WidgetStateProperty.resolveWith((
-                        states,
-                      ) {
-                        if (states.contains(WidgetState.disabled)) {
-                          return Colors.grey;
-                        }
-                        return Colors.green;
-                      }),
-                    ),
-                  ),
-                  const SizedBox(height: DesignTokens.spacing12),
-                  // Status message display
-                  if (provider.status == ProcessingStatus.error &&
-                      provider.errorMessage != null)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8.0),
-                      child: Text(
-                        '错误: ${provider.errorMessage}',
-                        style: const TextStyle(color: Colors.red, fontSize: 12),
-                        textAlign: TextAlign.center,
-                      ),
-                    )
-                  else if (provider.status == ProcessingStatus.completed)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8.0),
-                      child: Text(
-                        '操作成功!',
-                        style: TextStyle(
-                          color: Colors.green[700],
-                          fontSize: 12,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                ],
+              const SizedBox(height: DesignTokens.spacing8),
+              OutlinedButton.icon(
+                onPressed: () => _pickFiles(multiple: true),
+                icon: const Icon(Icons.collections),
+                label: const Text('批量添加'),
+                style: DesignTokens.secondaryButtonStyle,
               ),
-            ),
-          ],
-        );
-      },
+            ],
+          ),
+        ),
+        const Expanded(child: WatermarkSettings()),
+        const _PhotoWatermarkActionPanel(),
+      ],
     );
 
     if (isMobile) {
@@ -397,10 +247,11 @@ class _PhotoWatermarkScreenState extends State<PhotoWatermarkScreen> {
   Widget _buildCenterPanel() {
     return Container(
       color: DesignTokens.backgroundPrimary,
-      child: Consumer<PhotoWatermarkProvider>(
-        builder: (context, provider, _) {
-          if (provider.currentImage != null) {
-            return const WatermarkPreview();
+      child: Selector<PhotoWatermarkProvider, bool>(
+        selector: (context, provider) => provider.currentImage != null,
+        builder: (context, hasCurrentImage, _) {
+          if (hasCurrentImage) {
+            return const RepaintBoundary(child: WatermarkPreview());
           }
           return Center(
             child: Column(
@@ -438,181 +289,366 @@ class _PhotoWatermarkScreenState extends State<PhotoWatermarkScreen> {
   }
 
   /// 构建收起/展开按钮
-  Widget _buildCollapseButton() {
-    return Consumer<PhotoWatermarkProvider>(
-      builder: (context, provider, _) {
-        // 只有当有批处理任务时才显示按钮
-        if (provider.batchTasks.isEmpty) {
-          return const SizedBox.shrink();
-        }
+  Widget _buildCollapseButton({required bool hasBatchTasks}) {
+    if (!hasBatchTasks) {
+      return const SizedBox.shrink();
+    }
 
-        return Container(
-          width: 24,
-          decoration: BoxDecoration(
-            color: DesignTokens.backgroundSecondary,
-            border: Border(
-              left: BorderSide(color: DesignTokens.borderColorLight),
-              right: BorderSide(color: DesignTokens.borderColorLight),
+    return Container(
+      width: 24,
+      decoration: BoxDecoration(
+        color: DesignTokens.backgroundSecondary,
+        border: Border(
+          left: BorderSide(color: DesignTokens.borderColorLight),
+          right: BorderSide(color: DesignTokens.borderColorLight),
+        ),
+      ),
+      child: Center(
+        child: InkWell(
+          onTap: () {
+            setState(() {
+              _isRightPanelCollapsed = !_isRightPanelCollapsed;
+            });
+          },
+          child: Container(
+            height: 80,
+            width: 24,
+            decoration: BoxDecoration(
+              color: DesignTokens.backgroundTertiary,
+              borderRadius: BorderRadius.circular(DesignTokens.radiusSmall),
+            ),
+            child: Icon(
+              _isRightPanelCollapsed ? Icons.chevron_left : Icons.chevron_right,
+              size: 16,
+              color: DesignTokens.textSecondary,
             ),
           ),
-          child: Center(
-            child: InkWell(
-              onTap: () {
-                setState(() {
-                  _isRightPanelCollapsed = !_isRightPanelCollapsed;
-                });
-              },
-              child: Container(
-                height: 80,
-                width: 24,
-                decoration: BoxDecoration(
-                  color: DesignTokens.backgroundTertiary,
-                  borderRadius: BorderRadius.circular(DesignTokens.radiusSmall),
-                ),
-                child: Icon(
-                  _isRightPanelCollapsed
-                      ? Icons.chevron_left
-                      : Icons.chevron_right,
-                  size: 16,
-                  color: DesignTokens.textSecondary,
-                ),
-              ),
-            ),
-          ),
-        );
-      },
+        ),
+      ),
     );
   }
 
   /// 构建右侧批处理面板
-  Widget _buildRightPanel({bool isMobile = false}) {
-    return Consumer<PhotoWatermarkProvider>(
-      builder: (context, provider, _) {
-        if (provider.batchTasks.isEmpty) {
-          return const SizedBox.shrink();
-        }
+  Widget _buildRightPanel({
+    bool isMobile = false,
+    required bool hasBatchTasks,
+  }) {
+    if (!hasBatchTasks) {
+      return const SizedBox.shrink();
+    }
 
-        final panelContent = Column(
-          children: [
-            // 批处理工具栏
-            Container(
-              padding: const EdgeInsets.all(DesignTokens.spacing16),
-              decoration: BoxDecoration(
-                border: Border(
-                  bottom: BorderSide(color: DesignTokens.borderColorLight),
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text('批处理队列', style: DesignTokens.headingSmall),
-                      Text(
-                        '${provider.batchTasks.length} 个文件',
-                        style: DesignTokens.bodySmall.copyWith(
-                          color: DesignTokens.textSecondary,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: DesignTokens.spacing12),
-                  // 进度信息
-                  if (provider.status == ProcessingStatus.processing) ...[
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          '进度: ${provider.completedCount} / ${provider.totalCount}',
-                          style: DesignTokens.bodySmall,
-                        ),
-                        Text(
-                          '${(provider.overallProgress * 100).toInt()}%',
-                          style: DesignTokens.bodySmall,
-                        ),
-                      ],
+    final panelContent = const Column(
+      children: [
+        _PhotoWatermarkBatchPanelHeader(),
+        Expanded(child: BatchProcessList()),
+      ],
+    );
+
+    if (isMobile) {
+      return panelContent;
+    }
+
+    return AnimatedContainer(
+      duration: DesignTokens.animationFast,
+      width: !_isRightPanelCollapsed ? DesignTokens.rightPanelWidth : 0,
+      decoration: BoxDecoration(
+        color: DesignTokens.backgroundSecondary,
+        border: Border(left: BorderSide(color: DesignTokens.borderColorLight)),
+      ),
+      child: panelContent,
+    );
+  }
+}
+
+class _PhotoWatermarkOutputDirectoryButton extends StatelessWidget {
+  const _PhotoWatermarkOutputDirectoryButton({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = context.select<PhotoWatermarkProvider, String>((provider) {
+      return provider.outputDirectory?.path
+              .split(Platform.pathSeparator)
+              .last ??
+          '选择输出目录';
+    });
+
+    return TextButton.icon(
+      onPressed: onPressed,
+      icon: const Icon(Icons.folder_open),
+      label: Text(
+        label,
+        style: DesignTokens.bodySmall,
+        overflow: TextOverflow.ellipsis,
+      ),
+    );
+  }
+}
+
+class _PhotoWatermarkActionPanel extends StatelessWidget {
+  const _PhotoWatermarkActionPanel();
+
+  @override
+  Widget build(BuildContext context) {
+    final panelState = context
+        .select<
+          PhotoWatermarkProvider,
+          ({
+            bool hasCurrentImage,
+            bool needsPreviewGeneration,
+            bool hasPreviewImage,
+            ProcessingStatus status,
+            String? errorMessage,
+          })
+        >((provider) {
+          return (
+            hasCurrentImage: provider.currentImage != null,
+            needsPreviewGeneration: provider.needsPreviewGeneration,
+            hasPreviewImage: provider.previewImage != null,
+            status: provider.status,
+            errorMessage: provider.errorMessage,
+          );
+        });
+    final provider = context.read<PhotoWatermarkProvider>();
+    final isGenerating =
+        panelState.status == ProcessingStatus.processing &&
+        !panelState.needsPreviewGeneration;
+
+    return Container(
+      padding: const EdgeInsets.all(DesignTokens.spacing16),
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: DesignTokens.borderColorLight)),
+      ),
+      child: Column(
+        children: [
+          ElevatedButton.icon(
+            onPressed:
+                panelState.hasCurrentImage &&
+                    panelState.needsPreviewGeneration &&
+                    panelState.status != ProcessingStatus.processing
+                ? provider.generatePreviewManually
+                : null,
+            icon: isGenerating
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
                     ),
-                    const SizedBox(height: DesignTokens.spacing8),
-                    LinearProgressIndicator(
-                      value: provider.overallProgress,
-                      backgroundColor: DesignTokens.borderColorLight,
+                  )
+                : const Icon(Icons.visibility),
+            label: Text(isGenerating ? '生成中...' : '生成预览'),
+            style: DesignTokens.primaryButtonStyle,
+          ),
+          const SizedBox(height: DesignTokens.spacing12),
+          ElevatedButton.icon(
+            onPressed:
+                panelState.hasCurrentImage &&
+                    panelState.hasPreviewImage &&
+                    panelState.status != ProcessingStatus.processing
+                ? provider.saveCurrentImage
+                : null,
+            icon: panelState.status == ProcessingStatus.processing
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
                     ),
-                    const SizedBox(height: DesignTokens.spacing12),
-                  ],
-                  // 操作按钮
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: provider.batchTasks.isNotEmpty
-                              ? () => provider.clearBatchTasks()
-                              : null,
-                          icon: const Icon(Icons.clear_all, size: 20),
-                          label: const Text('清空'),
-                          style: DesignTokens.secondaryButtonStyle.copyWith(
-                            minimumSize: WidgetStateProperty.all(
-                              const Size(0, 36),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: DesignTokens.spacing8),
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed:
-                              provider.batchTasks.isNotEmpty &&
-                                  provider.status != ProcessingStatus.processing
-                              ? () => provider.startBatchProcessing()
-                              : null,
-                          icon: provider.status == ProcessingStatus.processing
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
-                                  ),
-                                )
-                              : const Icon(Icons.play_arrow, size: 20),
-                          label: Text(
-                            provider.status == ProcessingStatus.processing
-                                ? '处理中'
-                                : '开始',
-                          ),
-                          style: DesignTokens.primaryButtonStyle.copyWith(
-                            minimumSize: WidgetStateProperty.all(
-                              const Size(0, 36),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+                  )
+                : const Icon(Icons.save),
+            label: Text(
+              panelState.status == ProcessingStatus.processing
+                  ? '处理中...'
+                  : '保存图片',
             ),
-            // 批处理文件列表
-            const Expanded(child: BatchProcessList()),
-          ],
-        );
-
-        if (isMobile) {
-          return panelContent;
-        }
-
-        return AnimatedContainer(
-          duration: DesignTokens.animationFast,
-          width: !_isRightPanelCollapsed ? DesignTokens.rightPanelWidth : 0,
-          decoration: BoxDecoration(
-            color: DesignTokens.backgroundSecondary,
-            border: Border(
-              left: BorderSide(color: DesignTokens.borderColorLight),
+            style: DesignTokens.primaryButtonStyle.copyWith(
+              backgroundColor: WidgetStateProperty.resolveWith((states) {
+                if (states.contains(WidgetState.disabled)) {
+                  return Colors.grey;
+                }
+                return Colors.green;
+              }),
             ),
           ),
-          child: panelContent,
-        );
-      },
+          const SizedBox(height: DesignTokens.spacing12),
+          if (panelState.status == ProcessingStatus.error &&
+              panelState.errorMessage != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                '错误: ${panelState.errorMessage}',
+                style: const TextStyle(color: Colors.red, fontSize: 12),
+                textAlign: TextAlign.center,
+              ),
+            )
+          else if (panelState.status == ProcessingStatus.completed)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                '操作成功!',
+                style: TextStyle(color: Colors.green[700], fontSize: 12),
+                textAlign: TextAlign.center,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PhotoWatermarkBatchPanelHeader extends StatelessWidget {
+  const _PhotoWatermarkBatchPanelHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    final headerState = context
+        .select<
+          PhotoWatermarkProvider,
+          ({
+            int taskCount,
+            int completedCount,
+            int totalCount,
+            double overallProgress,
+            ProcessingStatus status,
+          })
+        >((provider) {
+          return (
+            taskCount: provider.batchTasks.length,
+            completedCount: provider.completedCount,
+            totalCount: provider.totalCount,
+            overallProgress: provider.overallProgress,
+            status: provider.status,
+          );
+        });
+    final provider = context.read<PhotoWatermarkProvider>();
+
+    return Container(
+      padding: const EdgeInsets.all(DesignTokens.spacing16),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(color: DesignTokens.borderColorLight),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('批处理队列', style: DesignTokens.headingSmall),
+              Text(
+                '${headerState.taskCount} 个文件',
+                style: DesignTokens.bodySmall.copyWith(
+                  color: DesignTokens.textSecondary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: DesignTokens.spacing12),
+          if (headerState.status == ProcessingStatus.processing) ...[
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  '进度: ${headerState.completedCount} / ${headerState.totalCount}',
+                  style: DesignTokens.bodySmall,
+                ),
+                Text(
+                  '${(headerState.overallProgress * 100).toInt()}%',
+                  style: DesignTokens.bodySmall,
+                ),
+              ],
+            ),
+            const SizedBox(height: DesignTokens.spacing8),
+            LinearProgressIndicator(
+              value: headerState.overallProgress,
+              backgroundColor: DesignTokens.borderColorLight,
+            ),
+            const SizedBox(height: DesignTokens.spacing12),
+          ],
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: headerState.taskCount > 0
+                      ? provider.clearBatchTasks
+                      : null,
+                  icon: const Icon(Icons.clear_all, size: 20),
+                  label: const Text('清空'),
+                  style: DesignTokens.secondaryButtonStyle.copyWith(
+                    minimumSize: WidgetStateProperty.all(const Size(0, 36)),
+                  ),
+                ),
+              ),
+              const SizedBox(width: DesignTokens.spacing8),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed:
+                      headerState.taskCount > 0 &&
+                          headerState.status != ProcessingStatus.processing
+                      ? provider.startBatchProcessing
+                      : null,
+                  icon: headerState.status == ProcessingStatus.processing
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.play_arrow, size: 20),
+                  label: Text(
+                    headerState.status == ProcessingStatus.processing
+                        ? '处理中'
+                        : '开始',
+                  ),
+                  style: DesignTokens.primaryButtonStyle.copyWith(
+                    minimumSize: WidgetStateProperty.all(const Size(0, 36)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PhotoWatermarkDragOverlay extends StatelessWidget {
+  const _PhotoWatermarkDragOverlay();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Theme.of(context).primaryColor.withAlpha(25),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.all(DesignTokens.spacing32),
+          decoration: BoxDecoration(
+            color: DesignTokens.backgroundSecondary,
+            borderRadius: BorderRadius.circular(DesignTokens.radiusXLarge),
+            boxShadow: DesignTokens.shadowXLarge,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.file_download,
+                size: 64,
+                color: Theme.of(context).primaryColor,
+              ),
+              const SizedBox(height: DesignTokens.spacing16),
+              const Text('释放以添加图片', style: DesignTokens.headingMedium),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

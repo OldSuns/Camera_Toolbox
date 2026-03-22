@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:data_table_2/data_table_2.dart';
 import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
+import '../../shared/widgets/responsive_layout.dart';
 import 'image_compress_service.dart';
 
 class ImageCompressScreen extends StatefulWidget {
@@ -91,53 +92,56 @@ class _ImageCompressScreenState extends State<ImageCompressScreen> {
     });
   }
 
+  int get _selectedRowsDigest =>
+      Object.hashAllUnordered(_selectedRows.map((file) => file.filePath));
+
   @override
   Widget build(BuildContext context) {
-    // 🔧 使用ChangeNotifierProvider.value而不是create
     return ChangeNotifierProvider.value(
       value: _service,
-      child: Consumer<ImageCompressService>(
-        builder: (context, service, child) {
-          return LayoutBuilder(
-            builder: (context, constraints) {
-              final isDesktop = constraints.maxWidth > kDesktopLayoutBreakpoint;
+      child: StableWidthBuilder<bool>(
+        resolve: (width) => width > kDesktopLayoutBreakpoint,
+        cacheKey: (
+          _quality.round(),
+          _outputToOriginalDir,
+          _selectedOutputDirectory,
+          _overwriteOriginal,
+          _sortColumnIndex,
+          _sortAscending,
+          _selectedRowsDigest,
+        ),
+        builder: (context, isDesktop) {
+          if (isDesktop) {
+            return Scaffold(
+              body: Padding(
+                padding: const EdgeInsets.all(16),
+                child: _buildDesktopLayout(),
+              ),
+            );
+          }
 
-              if (isDesktop) {
-                // 桌面端不需要 TabController
-                return Scaffold(
-                  body: Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: _buildDesktopLayout(service),
-                  ),
-                );
-              } else {
-                // 移动端使用 TabController
-                return DefaultTabController(
-                  length: 2,
-                  child: Scaffold(
-                    body: Column(
-                      children: [
-                        Material(
-                          color: Theme.of(context).colorScheme.surface,
-                          child: const TabBar(
-                            tabs: [
-                              Tab(icon: Icon(Icons.list), text: '文件列表'),
-                              Tab(icon: Icon(Icons.settings), text: '压缩设置'),
-                            ],
-                          ),
-                        ),
-                        Expanded(
-                          child: Padding(
-                            padding: const EdgeInsets.all(16.0),
-                            child: _buildMobileLayout(service),
-                          ),
-                        ),
+          return DefaultTabController(
+            length: 2,
+            child: Scaffold(
+              body: Column(
+                children: [
+                  const Material(
+                    child: TabBar(
+                      tabs: [
+                        Tab(icon: Icon(Icons.list), text: '文件列表'),
+                        Tab(icon: Icon(Icons.settings), text: '压缩设置'),
                       ],
                     ),
                   ),
-                );
-              }
-            },
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: _buildMobileLayout(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           );
         },
       ),
@@ -145,256 +149,366 @@ class _ImageCompressScreenState extends State<ImageCompressScreen> {
   }
 
   /// 构建桌面端布局
-  Widget _buildDesktopLayout(ImageCompressService service) {
+  Widget _buildDesktopLayout() {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Left Pane
         Expanded(
           flex: 3,
           child: Column(
             children: [
-              _buildActionButtons(service, isDesktop: true),
+              _buildActionButtons(isDesktop: true),
               const SizedBox(height: 8),
-              _buildImageDataTable(service, needsExpanded: true),
+              _buildImageDataTable(needsExpanded: true),
               const SizedBox(height: 8),
-              _buildStatusBar(service),
+              _buildStatusBar(),
             ],
           ),
         ),
         const VerticalDivider(width: 16),
-        // Right Pane
-        Expanded(flex: 1, child: _buildOptionsPanel(service)),
+        Expanded(flex: 1, child: _buildOptionsPanel()),
       ],
     );
   }
 
   /// 构建移动端布局
-  Widget _buildMobileLayout(ImageCompressService service) {
+  Widget _buildMobileLayout() {
     return TabBarView(
       children: [
-        // 第一个标签页：文件列表
         Column(
           children: [
-            _buildActionButtons(service, isDesktop: false),
+            _buildActionButtons(isDesktop: false),
             const SizedBox(height: 8),
-            _buildImageDataTable(service, needsExpanded: true),
+            _buildImageDataTable(needsExpanded: true),
             const SizedBox(height: 8),
-            _buildStatusBar(service),
+            _buildStatusBar(),
           ],
         ),
-        // 第二个标签页：压缩设置
-        _buildOptionsPanel(service, isMobile: true),
+        _buildOptionsPanel(isMobile: true),
       ],
     );
   }
 
-  Widget _buildActionButtons(
-    ImageCompressService service, {
-    required bool isDesktop,
-  }) {
-    final isCompressing = service.isCompressing;
-    final hasSelection = _selectedRows.isNotEmpty;
-
-    final buttons = [
-      ElevatedButton.icon(
-        onPressed: isCompressing ? null : () => _pickImages(service),
-        icon: const Icon(Icons.add),
-        label: const Text('添加'),
-      ),
-      const SizedBox(width: 8),
-      ElevatedButton.icon(
-        onPressed: isCompressing || !hasSelection
-            ? null
-            : () => _removeSelectedImages(service),
-        icon: const Icon(Icons.remove),
-        label: const Text('移除'),
-      ),
-      const SizedBox(width: 8),
-      ElevatedButton.icon(
-        onPressed: isCompressing || service.selectedImages.isEmpty
-            ? null
-            : () {
-                service.clearAllImages();
-                setState(() {
-                  _selectedRows.clear();
-                });
-              },
-        icon: const Icon(Icons.clear_all),
-        label: const Text('清空'),
-      ),
-    ];
-
-    if (isDesktop) {
-      return Row(
-        children: [
-          ...buttons,
-          const Spacer(),
-          ElevatedButton.icon(
-            onPressed: isCompressing || service.selectedImages.isEmpty
-                ? null
-                : () => _startCompression(service),
-            icon: isCompressing
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.compress),
-            label: Text(isCompressing ? '压缩中...' : '压缩'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Theme.of(context).colorScheme.primary,
-              foregroundColor: Theme.of(context).colorScheme.onPrimary,
-            ),
-          ),
-        ],
-      );
-    } else {
-      return Column(
-        children: [
-          Row(
-            children: [
-              Expanded(child: buttons[0]),
-              const SizedBox(width: 8),
-              Expanded(child: buttons[2]),
-              const SizedBox(width: 8),
-              Expanded(child: buttons[4]),
-            ],
-          ),
-          const SizedBox(height: 8),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: isCompressing || service.selectedImages.isEmpty
-                  ? null
-                  : () => _startCompression(service),
-              icon: isCompressing
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.compress),
-              label: Text(isCompressing ? '压缩中...' : '压缩'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Theme.of(context).colorScheme.primary,
-                foregroundColor: Theme.of(context).colorScheme.onPrimary,
-              ),
-            ),
-          ),
-        ],
-      );
-    }
+  Widget _buildActionButtons({required bool isDesktop}) {
+    return _ImageCompressActionButtons(
+      isDesktop: isDesktop,
+      hasSelection: _selectedRows.isNotEmpty,
+      onPickImages: () => _pickImages(_service),
+      onRemoveSelected: () => _removeSelectedImages(_service),
+      onClearAll: () {
+        _service.clearAllImages();
+        setState(() {
+          _selectedRows.clear();
+        });
+      },
+      onStartCompression: () => _startCompression(_service),
+    );
   }
 
-  Widget _buildImageDataTable(
-    ImageCompressService service, {
-    bool needsExpanded = true,
-  }) {
-    final table = DataTable2(
-      columnSpacing: 20,
-      horizontalMargin: 12,
-      minWidth: 600,
-      sortColumnIndex: _sortColumnIndex,
-      sortAscending: _sortAscending,
-      isHorizontalScrollBarVisible: true,
-      isVerticalScrollBarVisible: true,
-      columns: [
-        DataColumn2(
-          label: const Text('名称'),
-          size: ColumnSize.L,
-          onSort: (i, a) => _onSort(service, i, a),
-        ),
-        DataColumn2(
-          label: const Text('大小'),
-          size: ColumnSize.S,
-          onSort: (i, a) => _onSort(service, i, a),
-        ),
-        DataColumn2(
-          label: const Text('分辨率'),
-          size: ColumnSize.M,
-          onSort: (i, a) => _onSort(service, i, a),
-        ),
-        DataColumn2(
-          label: const Text('节省了'),
-          size: ColumnSize.S,
-          onSort: (i, a) => _onSort(service, i, a),
-        ),
-        const DataColumn2(label: Text('状态'), size: ColumnSize.M),
-      ],
-      rows: service.selectedImages.map((file) {
-        final isSelected = _selectedRows.contains(file);
-        return DataRow(
-          selected: isSelected,
-          onSelectChanged: (selected) {
-            setState(() {
-              if (selected ?? false) {
-                _selectedRows.add(file);
-              } else {
-                _selectedRows.remove(file);
-              }
-            });
-          },
-          cells: [
-            DataCell(
-              Row(
-                children: [
-                  Expanded(child: Text(file.name)),
-                  if (file.isCompleted)
-                    const Icon(
-                      Icons.check_circle,
-                      color: Colors.green,
-                      size: 16,
-                    )
-                  else if (file.isCompressing)
-                    const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                ],
-              ),
-            ),
-            DataCell(Text(file.size)),
-            DataCell(Text(file.resolution)),
-            DataCell(Text(file.compressionSavings)),
-            DataCell(
-              file.isCompressing
-                  ? LinearProgressIndicator(value: file.progress)
-                  : file.isCompleted
-                  ? Text(
-                      file.status == 'skipped' ? '已跳过' : '已完成',
-                      style: TextStyle(
-                        color: file.status == 'skipped'
-                            ? Colors.orange
-                            : Colors.green,
-                      ),
-                    )
-                  : const Text('等待中'),
-            ),
-          ],
-        );
-      }).toList(),
+  Widget _buildImageDataTable({bool needsExpanded = true}) {
+    final table = RepaintBoundary(
+      child: _ImageCompressDataTable(
+        sortColumnIndex: _sortColumnIndex,
+        sortAscending: _sortAscending,
+        selectedRows: _selectedRows,
+        onSort: _onSort,
+        onRowSelectionChanged: (file, selected) {
+          setState(() {
+            if (selected) {
+              _selectedRows.add(file);
+            } else {
+              _selectedRows.remove(file);
+            }
+          });
+        },
+      ),
     );
 
     return needsExpanded ? Expanded(child: table) : table;
   }
 
-  Widget _buildStatusBar(ImageCompressService service) {
+  Widget _buildStatusBar() {
+    return const _ImageCompressStatusBar();
+  }
+
+  Widget _buildOptionsPanel({bool isMobile = false}) {
+    return _ImageCompressOptionsPanel(
+      quality: _quality,
+      maxWidthController: _maxWidthController,
+      maxHeightController: _maxHeightController,
+      selectedOutputDirectory: _selectedOutputDirectory,
+      outputToOriginalDir: _outputToOriginalDir,
+      overwriteOriginal: _overwriteOriginal,
+      onQualityChanged: (value) {
+        setState(() {
+          _quality = value;
+        });
+      },
+      onSelectOutputDirectory: _selectOutputDirectory,
+      onOutputToOriginalDirChanged: (value) {
+        setState(() {
+          _outputToOriginalDir = value;
+        });
+      },
+      onOverwriteOriginalChanged: (value) {
+        setState(() {
+          _overwriteOriginal = value;
+        });
+      },
+    );
+  }
+}
+
+class _ImageCompressActionButtons extends StatelessWidget {
+  const _ImageCompressActionButtons({
+    required this.isDesktop,
+    required this.hasSelection,
+    required this.onPickImages,
+    required this.onRemoveSelected,
+    required this.onClearAll,
+    required this.onStartCompression,
+  });
+
+  final bool isDesktop;
+  final bool hasSelection;
+  final VoidCallback onPickImages;
+  final VoidCallback onRemoveSelected;
+  final VoidCallback onClearAll;
+  final VoidCallback onStartCompression;
+
+  @override
+  Widget build(BuildContext context) {
+    final actionState = context
+        .select<ImageCompressService, ({bool isCompressing, bool hasImages})>((
+          service,
+        ) {
+          return (
+            isCompressing: service.isCompressing,
+            hasImages: service.selectedImages.isNotEmpty,
+          );
+        });
+
+    final buttons = [
+      ElevatedButton.icon(
+        onPressed: actionState.isCompressing ? null : onPickImages,
+        icon: const Icon(Icons.add),
+        label: const Text('添加'),
+      ),
+      const SizedBox(width: 8),
+      ElevatedButton.icon(
+        onPressed: actionState.isCompressing || !hasSelection
+            ? null
+            : onRemoveSelected,
+        icon: const Icon(Icons.remove),
+        label: const Text('移除'),
+      ),
+      const SizedBox(width: 8),
+      ElevatedButton.icon(
+        onPressed: actionState.isCompressing || !actionState.hasImages
+            ? null
+            : onClearAll,
+        icon: const Icon(Icons.clear_all),
+        label: const Text('清空'),
+      ),
+    ];
+
+    final compressButton = ElevatedButton.icon(
+      onPressed: actionState.isCompressing || !actionState.hasImages
+          ? null
+          : onStartCompression,
+      icon: actionState.isCompressing
+          ? const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.compress),
+      label: Text(actionState.isCompressing ? '压缩中...' : '压缩'),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Theme.of(context).colorScheme.primary,
+        foregroundColor: Theme.of(context).colorScheme.onPrimary,
+      ),
+    );
+
+    if (isDesktop) {
+      return Row(children: [...buttons, const Spacer(), compressButton]);
+    }
+
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(child: buttons[0]),
+            const SizedBox(width: 8),
+            Expanded(child: buttons[2]),
+            const SizedBox(width: 8),
+            Expanded(child: buttons[4]),
+          ],
+        ),
+        const SizedBox(height: 8),
+        SizedBox(width: double.infinity, child: compressButton),
+      ],
+    );
+  }
+}
+
+class _ImageCompressDataTable extends StatelessWidget {
+  const _ImageCompressDataTable({
+    required this.sortColumnIndex,
+    required this.sortAscending,
+    required this.selectedRows,
+    required this.onSort,
+    required this.onRowSelectionChanged,
+  });
+
+  final int? sortColumnIndex;
+  final bool sortAscending;
+  final Set<ImageFile> selectedRows;
+  final void Function(
+    ImageCompressService service,
+    int columnIndex,
+    bool ascending,
+  )
+  onSort;
+  final void Function(ImageFile file, bool selected) onRowSelectionChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<ImageCompressService>(
+      builder: (context, service, _) {
+        return DataTable2(
+          columnSpacing: 20,
+          horizontalMargin: 12,
+          minWidth: 600,
+          sortColumnIndex: sortColumnIndex,
+          sortAscending: sortAscending,
+          isHorizontalScrollBarVisible: true,
+          isVerticalScrollBarVisible: true,
+          columns: [
+            DataColumn2(
+              label: const Text('名称'),
+              size: ColumnSize.L,
+              onSort: (columnIndex, ascending) {
+                onSort(service, columnIndex, ascending);
+              },
+            ),
+            DataColumn2(
+              label: const Text('大小'),
+              size: ColumnSize.S,
+              onSort: (columnIndex, ascending) {
+                onSort(service, columnIndex, ascending);
+              },
+            ),
+            DataColumn2(
+              label: const Text('分辨率'),
+              size: ColumnSize.M,
+              onSort: (columnIndex, ascending) {
+                onSort(service, columnIndex, ascending);
+              },
+            ),
+            DataColumn2(
+              label: const Text('节省了'),
+              size: ColumnSize.S,
+              onSort: (columnIndex, ascending) {
+                onSort(service, columnIndex, ascending);
+              },
+            ),
+            const DataColumn2(label: Text('状态'), size: ColumnSize.M),
+          ],
+          rows: service.selectedImages.map((file) {
+            final isSelected = selectedRows.contains(file);
+            return DataRow(
+              selected: isSelected,
+              onSelectChanged: (selected) {
+                onRowSelectionChanged(file, selected ?? false);
+              },
+              cells: [
+                DataCell(
+                  Row(
+                    children: [
+                      Expanded(child: Text(file.name)),
+                      if (file.isCompleted)
+                        const Icon(
+                          Icons.check_circle,
+                          color: Colors.green,
+                          size: 16,
+                        )
+                      else if (file.isCompressing)
+                        const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                    ],
+                  ),
+                ),
+                DataCell(Text(file.size)),
+                DataCell(Text(file.resolution)),
+                DataCell(Text(file.compressionSavings)),
+                DataCell(
+                  file.isCompressing
+                      ? LinearProgressIndicator(value: file.progress)
+                      : file.isCompleted
+                      ? Text(
+                          file.status == 'skipped' ? '已跳过' : '已完成',
+                          style: TextStyle(
+                            color: file.status == 'skipped'
+                                ? Colors.orange
+                                : Colors.green,
+                          ),
+                        )
+                      : const Text('等待中'),
+                ),
+              ],
+            );
+          }).toList(),
+        );
+      },
+    );
+  }
+}
+
+class _ImageCompressStatusBar extends StatelessWidget {
+  const _ImageCompressStatusBar();
+
+  @override
+  Widget build(BuildContext context) {
+    final statusState = context
+        .select<
+          ImageCompressService,
+          ({
+            int totalSelectedImages,
+            String totalSize,
+            bool isCompressing,
+            double overallProgress,
+            String statusMessage,
+          })
+        >((service) {
+          return (
+            totalSelectedImages: service.totalSelectedImages,
+            totalSize: service.totalSize,
+            isCompressing: service.isCompressing,
+            overallProgress: service.overallProgress,
+            statusMessage: service.statusMessage,
+          );
+        });
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Text('${service.totalSelectedImages} 张已选图片 | ${service.totalSize}'),
-        if (service.isCompressing) ...[
+        Text(
+          '${statusState.totalSelectedImages} 张已选图片 | ${statusState.totalSize}',
+        ),
+        if (statusState.isCompressing) ...[
           const SizedBox(height: 4),
-          LinearProgressIndicator(value: service.overallProgress),
+          LinearProgressIndicator(value: statusState.overallProgress),
           const SizedBox(height: 4),
         ],
-        if (service.statusMessage.isNotEmpty) ...[
+        if (statusState.statusMessage.isNotEmpty) ...[
           const SizedBox(height: 4),
           Center(
             child: Text(
-              service.statusMessage,
+              statusState.statusMessage,
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
@@ -402,47 +516,59 @@ class _ImageCompressScreenState extends State<ImageCompressScreen> {
       ],
     );
   }
+}
 
-  Widget _buildOptionsPanel(
-    ImageCompressService service, {
-    bool isMobile = false,
-  }) {
-    // 检查是否为移动端或macOS平台
-    final bool isMobileOrMacOS =
+class _ImageCompressOptionsPanel extends StatelessWidget {
+  const _ImageCompressOptionsPanel({
+    required this.quality,
+    required this.maxWidthController,
+    required this.maxHeightController,
+    required this.selectedOutputDirectory,
+    required this.outputToOriginalDir,
+    required this.overwriteOriginal,
+    required this.onQualityChanged,
+    required this.onSelectOutputDirectory,
+    required this.onOutputToOriginalDirChanged,
+    required this.onOverwriteOriginalChanged,
+  });
+
+  final double quality;
+  final TextEditingController maxWidthController;
+  final TextEditingController maxHeightController;
+  final String? selectedOutputDirectory;
+  final bool outputToOriginalDir;
+  final bool overwriteOriginal;
+  final ValueChanged<double> onQualityChanged;
+  final VoidCallback onSelectOutputDirectory;
+  final ValueChanged<bool> onOutputToOriginalDirChanged;
+  final ValueChanged<bool> onOverwriteOriginalChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final isMobileOrMacOS =
         Platform.isAndroid || Platform.isIOS || Platform.isMacOS;
 
     return ListView(
       children: [
         const Text('压缩选项', style: TextStyle(fontWeight: FontWeight.bold)),
         const SizedBox(height: 16),
-
-        // 图片质量
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            const Text('JPEG 图片质量'),
-            Text(_quality.round().toString()),
-          ],
+          children: [const Text('JPEG 图片质量'), Text(quality.round().toString())],
         ),
         Slider(
-          value: _quality,
+          value: quality,
           min: 1,
           max: 100,
           divisions: 99,
-          label: _quality.round().toString(),
-          onChanged: (value) {
-            setState(() {
-              _quality = value;
-            });
-          },
+          label: quality.round().toString(),
+          onChanged: onQualityChanged,
         ),
         const SizedBox(height: 24),
-
-        // 图片尺寸
         const Text('图片尺寸', style: TextStyle(fontWeight: FontWeight.bold)),
         const SizedBox(height: 16),
         TextField(
-          controller: _maxWidthController,
+          controller: maxWidthController,
           decoration: const InputDecoration(
             labelText: '最大宽度 (可选)',
             border: OutlineInputBorder(),
@@ -451,50 +577,43 @@ class _ImageCompressScreenState extends State<ImageCompressScreen> {
         ),
         const SizedBox(height: 16),
         TextField(
-          controller: _maxHeightController,
+          controller: maxHeightController,
           decoration: const InputDecoration(
             labelText: '最大高度 (可选)',
             border: OutlineInputBorder(),
           ),
           keyboardType: TextInputType.number,
         ),
-
-        // 只在桌面端显示输出设置
         if (!isMobileOrMacOS) ...[
           const SizedBox(height: 24),
-          // 输出设置
           const Text('输出', style: TextStyle(fontWeight: FontWeight.bold)),
           const SizedBox(height: 16),
-          if (!_outputToOriginalDir)
+          if (!outputToOriginalDir)
             Padding(
-              padding: const EdgeInsets.only(bottom: 8.0),
+              padding: const EdgeInsets.only(bottom: 8),
               child: ElevatedButton.icon(
-                onPressed: _selectOutputDirectory,
+                onPressed: onSelectOutputDirectory,
                 icon: const Icon(Icons.folder_open),
                 label: Text(
-                  _selectedOutputDirectory != null ? '已选择目录' : '选择输出目录',
+                  selectedOutputDirectory != null ? '已选择目录' : '选择输出目录',
                 ),
               ),
             ),
           CheckboxListTile(
             title: const Text('输出到原目录'),
-            value: _outputToOriginalDir,
+            value: outputToOriginalDir,
             onChanged: (value) {
-              setState(() {
-                _outputToOriginalDir = value ?? false;
-              });
+              onOutputToOriginalDirChanged(value ?? false);
             },
             controlAffinity: ListTileControlAffinity.leading,
             contentPadding: EdgeInsets.zero,
           ),
-          if (_outputToOriginalDir)
+          if (outputToOriginalDir)
             CheckboxListTile(
               title: const Text('覆盖原文件'),
-              value: _overwriteOriginal,
+              value: overwriteOriginal,
               onChanged: (value) {
-                setState(() {
-                  _overwriteOriginal = value ?? false;
-                });
+                onOverwriteOriginalChanged(value ?? false);
               },
               controlAffinity: ListTileControlAffinity.leading,
               contentPadding: EdgeInsets.zero,
