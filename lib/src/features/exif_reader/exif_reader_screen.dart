@@ -1,8 +1,11 @@
 import 'dart:io';
 import 'dart:ui' as ui;
+
+import 'package:exif_reader/exif_reader.dart' as exif_reader;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
+
 import 'exif_data.dart';
 import 'exif_service.dart';
 import '../../shared/services/image_picker_service.dart';
@@ -27,6 +30,7 @@ class _ExifReaderScreenState extends State<ExifReaderScreen> {
   Uint8List? _previewImageBytes;
   Size? _previewImageSize;
   Size? _sourceImageSize;
+  int _previewRotationQuarterTurns = 0;
   Map<String, String> _basicImageInfo = const {};
   bool _isLoading = false;
   String? _errorMessage;
@@ -93,6 +97,7 @@ class _ExifReaderScreenState extends State<ExifReaderScreen> {
       _previewImageBytes = null;
       _previewImageSize = null;
       _sourceImageSize = null;
+      _previewRotationQuarterTurns = 0;
       _basicImageInfo = const {};
       _errorMessage = null;
       _isLoading = true; // Ensure loading indicator is shown
@@ -105,6 +110,9 @@ class _ExifReaderScreenState extends State<ExifReaderScreen> {
         exifData.thumbnailBytes,
       );
       final sourceImageSize = await _decodeFileImageSize(image);
+      final previewRotationQuarterTurns = _resolvePreviewRotationQuarterTurns(
+        exifData,
+      );
       if (mounted) {
         setState(() {
           _basicImageInfo = imageInfo;
@@ -112,6 +120,7 @@ class _ExifReaderScreenState extends State<ExifReaderScreen> {
           _previewImageBytes = exifData.thumbnailBytes;
           _previewImageSize = previewImageSize;
           _sourceImageSize = sourceImageSize;
+          _previewRotationQuarterTurns = previewRotationQuarterTurns;
           _errorMessage = exifData.hasExif
               ? null
               : (exifData.errorMessage ?? '未读取到EXIF信息');
@@ -142,6 +151,7 @@ class _ExifReaderScreenState extends State<ExifReaderScreen> {
       _previewImageBytes = null;
       _previewImageSize = null;
       _sourceImageSize = null;
+      _previewRotationQuarterTurns = 0;
       _basicImageInfo = const {};
       _errorMessage = null;
       _isLoading = false; // Ensure loading state is reset
@@ -416,34 +426,45 @@ class _ExifReaderScreenState extends State<ExifReaderScreen> {
   }
 
   Widget _buildEmbeddedPreview() {
-    return Image.memory(
-      _previewImageBytes!,
-      fit: BoxFit.contain,
-      gaplessPlayback: true,
-      filterQuality: FilterQuality.medium,
-      errorBuilder: (context, error, stackTrace) {
-        return _buildRawImagePlaceholder();
-      },
+    return _applyPreviewRotation(
+      Image.memory(
+        _previewImageBytes!,
+        fit: BoxFit.contain,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.medium,
+        errorBuilder: (context, error, stackTrace) {
+          return _buildRawImagePlaceholder();
+        },
+      ),
     );
+  }
+
+  Widget _applyPreviewRotation(Widget child) {
+    if (_previewRotationQuarterTurns == 0) {
+      return child;
+    }
+    return RotatedBox(quarterTurns: _previewRotationQuarterTurns, child: child);
   }
 
   Widget _buildFilePreview({
     required int cacheWidth,
     required int cacheHeight,
   }) {
-    return Image.file(
-      _selectedImage!,
-      fit: BoxFit.contain,
-      gaplessPlayback: true,
-      filterQuality: FilterQuality.medium,
-      cacheWidth: cacheWidth > 0 ? cacheWidth : null,
-      cacheHeight: cacheHeight > 0 ? cacheHeight : null,
-      errorBuilder: (context, error, stackTrace) {
-        if (_previewImageBytes != null) {
-          return _buildEmbeddedPreview();
-        }
-        return _buildRawImagePlaceholder();
-      },
+    return _applyPreviewRotation(
+      Image.file(
+        _selectedImage!,
+        fit: BoxFit.contain,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.medium,
+        cacheWidth: cacheWidth > 0 ? cacheWidth : null,
+        cacheHeight: cacheHeight > 0 ? cacheHeight : null,
+        errorBuilder: (context, error, stackTrace) {
+          if (_previewImageBytes != null) {
+            return _buildEmbeddedPreview();
+          }
+          return _buildRawImagePlaceholder();
+        },
+      ),
     );
   }
 
@@ -513,16 +534,18 @@ class _ExifReaderScreenState extends State<ExifReaderScreen> {
   }
 
   double? _resolvedPreviewAspectRatio() {
-    if (_sourceImageSize != null &&
-        _sourceImageSize!.width > 0 &&
-        _sourceImageSize!.height > 0) {
-      return _sourceImageSize!.width / _sourceImageSize!.height;
+    final sourceImageSize = _rotatedPreviewSize(_sourceImageSize);
+    if (sourceImageSize != null &&
+        sourceImageSize.width > 0 &&
+        sourceImageSize.height > 0) {
+      return sourceImageSize.width / sourceImageSize.height;
     }
 
-    if (_previewImageSize != null &&
-        _previewImageSize!.width > 0 &&
-        _previewImageSize!.height > 0) {
-      return _previewImageSize!.width / _previewImageSize!.height;
+    final previewImageSize = _rotatedPreviewSize(_previewImageSize);
+    if (previewImageSize != null &&
+        previewImageSize.width > 0 &&
+        previewImageSize.height > 0) {
+      return previewImageSize.width / previewImageSize.height;
     }
 
     final exifWidth = _tryParseDimension(_exifData?.translatedData['图片宽度']);
@@ -532,6 +555,59 @@ class _ExifReaderScreenState extends State<ExifReaderScreen> {
     }
 
     return null;
+  }
+
+  Size? _rotatedPreviewSize(Size? size) {
+    if (size == null) {
+      return null;
+    }
+    if (_previewRotationQuarterTurns.isOdd) {
+      return Size(size.height, size.width);
+    }
+    return size;
+  }
+
+  int _resolvePreviewRotationQuarterTurns(ExifData exifData) {
+    final orientationValue = exifData.rawData['Image Orientation'];
+    final orientation = _parseExifOrientation(orientationValue);
+    switch (orientation) {
+      case 6:
+        return 1;
+      case 3:
+        return 2;
+      case 8:
+        return 3;
+      default:
+        return 0;
+    }
+  }
+
+  int? _parseExifOrientation(dynamic value) {
+    if (value == null) {
+      return null;
+    }
+
+    if (value is exif_reader.IfdTag) {
+      final values = value.values.toList();
+      if (values.isEmpty) {
+        return null;
+      }
+      final first = values.first;
+      if (first is num) {
+        return first.toInt();
+      }
+    }
+
+    if (value is num) {
+      return value.toInt();
+    }
+
+    final text = value.toString();
+    final match = RegExp(r'\d+').firstMatch(text);
+    if (match == null) {
+      return null;
+    }
+    return int.tryParse(match.group(0)!);
   }
 
   double? _tryParseDimension(String? value) {

@@ -659,7 +659,7 @@ class ImageContainer {
     final bytes = await file.readAsBytes();
 
     // 读取EXIF信息
-    final exifData = await readExifFromBytes(bytes);
+    final exif = await readExifFromBytes(bytes);
 
     // 解码图像
     final codec = await ui.instantiateImageCodec(bytes);
@@ -669,7 +669,7 @@ class ImageContainer {
     return ImageContainer(
       sourceFile: file,
       originalImage: image,
-      exifData: exifData,
+      exifData: exif.tags,
     );
   }
 }

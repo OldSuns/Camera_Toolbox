@@ -2,8 +2,8 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:exif_reader/exif_reader.dart' as exif_reader;
-// ignore: implementation_imports
-import 'package:exif_reader/src/read_exif.dart' as exif_reader_api;
+import 'package:image/image.dart' as img;
+import 'package:random_access_source/random_access_source.dart';
 
 import 'exif_data.dart';
 import 'exif_translator.dart';
@@ -20,33 +20,40 @@ Future<ExifData> _parseExifDataInIsolate(String filePath) async {
       return ExifData.error(filePath, '文件不存在');
     }
 
-    final extension = filePath.toLowerCase().split('.').last;
-    Map<String, exif_reader.IfdTag> data;
+    late exif_reader.ExifData exif;
 
-    // CR3 目前只能走 file-based API，bytes reader 会直接抛异常。
-    if (extension == 'cr3') {
-      data = await exif_reader_api.readExifFromFile(file);
+    // CR3 需要随机访问源读取，4.x 版本已移除 readExifFromFile。
+    if (filePath.toLowerCase().endsWith('.cr3')) {
+      final source = await FileRASource.loadFile(file);
+      try {
+        exif = await exif_reader.readExifFromSource(source);
+      } finally {
+        await source.close();
+      }
     } else {
       const int readLimit = 256 * 1024; // 256KB
       final fileBytes = await file
           .openRead(0, readLimit)
           .expand((bytes) => bytes)
           .toList();
-      data = await exif_reader_api.readExifFromBytes(
-        Uint8List.fromList(fileBytes),
-      );
-      if (data.isEmpty) {
+      exif = await exif_reader.readExifFromBytes(Uint8List.fromList(fileBytes));
+      if (exif.tags.isEmpty) {
         final fullBytes = await file.readAsBytes();
-        data = await exif_reader_api.readExifFromBytes(fullBytes);
+        exif = await exif_reader.readExifFromBytes(fullBytes);
       }
     }
 
+    final data = exif.tags;
     if (data.isEmpty) {
       return ExifData.empty(filePath);
     }
 
-    // 获取缩略图
-    final thumbnailBytes = ExifService._extractThumbnailBytes(data);
+    // 获取缩略图；CR3 在 tags 中拿不到时，回退到文件内嵌 JPEG 扫描。
+    final thumbnailBytes = ExifService._resolveThumbnailBytes(
+      file: file,
+      imagePath: filePath,
+      data: data,
+    );
 
     // 过滤掉不需要的标签
     final filteredData = ExifService._filterExifData(data);
@@ -75,6 +82,23 @@ class ExifService {
   /// 从文件路径读取EXIF信息，此操作将在一个独立的 Isolate 中执行以避免UI卡顿。
   static Future<ExifData> readExifFromFile(String filePath) async {
     return await compute(_parseExifDataInIsolate, filePath);
+  }
+
+  static Uint8List? _resolveThumbnailBytes({
+    required File file,
+    required String imagePath,
+    required Map<String, exif_reader.IfdTag> data,
+  }) {
+    final fromTags = _extractThumbnailBytes(data);
+    if (fromTags != null && fromTags.isNotEmpty) {
+      return fromTags;
+    }
+
+    if (!_isCr3File(imagePath)) {
+      return null;
+    }
+
+    return _extractCr3EmbeddedPreview(file);
   }
 
   /// 从EXIF数据中安全地提取预览图字节
@@ -126,6 +150,82 @@ class ExifService {
       return null;
     }
     return null;
+  }
+
+  static bool _isCr3File(String filePath) {
+    return filePath.toLowerCase().endsWith('.cr3');
+  }
+
+  static Uint8List? _extractCr3EmbeddedPreview(File file) {
+    try {
+      final fileBytes = file.readAsBytesSync();
+      return _extractEmbeddedJpegPreview(fileBytes);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Uint8List? _extractEmbeddedJpegPreview(Uint8List bytes) {
+    _EmbeddedJpegCandidate? bestCandidate;
+    var searchStart = 0;
+
+    while (true) {
+      final jpegStart = _findJpegStart(bytes, searchStart);
+      if (jpegStart == -1) {
+        break;
+      }
+
+      final jpegEnd = _findJpegEnd(bytes, jpegStart + 3);
+      if (jpegEnd == -1) {
+        break;
+      }
+
+      final candidateView = Uint8List.sublistView(
+        bytes,
+        jpegStart,
+        jpegEnd + 2,
+      );
+      final decoded = img.decodeImage(candidateView);
+      if (decoded != null) {
+        final candidate = _EmbeddedJpegCandidate(
+          bytes: Uint8List.fromList(candidateView),
+          width: decoded.width,
+          height: decoded.height,
+        );
+        if (candidate.isBetterThan(bestCandidate)) {
+          bestCandidate = candidate;
+        }
+      }
+
+      searchStart = jpegEnd + 2;
+    }
+
+    return bestCandidate?.bytes;
+  }
+
+  static int _findJpegStart(Uint8List bytes, int startIndex) {
+    for (var index = startIndex; index <= bytes.length - 3; index++) {
+      if (bytes[index] == 0xFF &&
+          bytes[index + 1] == 0xD8 &&
+          bytes[index + 2] == 0xFF) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  static int _findJpegEnd(Uint8List bytes, int startIndex) {
+    for (var index = startIndex; index <= bytes.length - 2; index++) {
+      if (bytes[index] == 0xFF && bytes[index + 1] == 0xD9) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  @visibleForTesting
+  static Uint8List? extractEmbeddedJpegPreviewForTesting(Uint8List bytes) {
+    return _extractEmbeddedJpegPreview(bytes);
   }
 
   /// 过滤EXIF数据，移除不需要的标签
@@ -421,5 +521,29 @@ class ExifService {
       return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
     }
     return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+  }
+}
+
+class _EmbeddedJpegCandidate {
+  final Uint8List bytes;
+  final int width;
+  final int height;
+
+  const _EmbeddedJpegCandidate({
+    required this.bytes,
+    required this.width,
+    required this.height,
+  });
+
+  int get pixelArea => width * height;
+
+  bool isBetterThan(_EmbeddedJpegCandidate? other) {
+    if (other == null) {
+      return true;
+    }
+    if (pixelArea != other.pixelArea) {
+      return pixelArea > other.pixelArea;
+    }
+    return bytes.length > other.bytes.length;
   }
 }

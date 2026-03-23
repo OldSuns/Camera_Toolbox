@@ -9,7 +9,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  exif_reader: ^3.16.1
+  exif_reader: ^4.1.0
+  random_access_source: ^4.2.1
   image_picker: ^1.1.2
   file_picker: ^10.3.10
   path_provider: ^2.1.2
