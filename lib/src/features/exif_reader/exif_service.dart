@@ -1,6 +1,10 @@
 import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:exif_reader/exif_reader.dart' as exif_reader;
+// ignore: implementation_imports
+import 'package:exif_reader/src/read_exif.dart' as exif_reader_api;
+
 import 'exif_data.dart';
 import 'exif_translator.dart';
 
@@ -19,19 +23,21 @@ Future<ExifData> _parseExifDataInIsolate(String filePath) async {
     final extension = filePath.toLowerCase().split('.').last;
     Map<String, exif_reader.IfdTag> data;
 
-    // CR3格式的特殊处理，因为它还不支持从字节流中读取
+    // CR3 目前只能走 file-based API，bytes reader 会直接抛异常。
     if (extension == 'cr3') {
-      data = await exif_reader.readExifFromFile(file);
+      data = await exif_reader_api.readExifFromFile(file);
     } else {
       const int readLimit = 256 * 1024; // 256KB
       final fileBytes = await file
           .openRead(0, readLimit)
           .expand((bytes) => bytes)
           .toList();
-      data = await exif_reader.readExifFromBytes(Uint8List.fromList(fileBytes));
+      data = await exif_reader_api.readExifFromBytes(
+        Uint8List.fromList(fileBytes),
+      );
       if (data.isEmpty) {
         final fullBytes = await file.readAsBytes();
-        data = await exif_reader.readExifFromBytes(fullBytes);
+        data = await exif_reader_api.readExifFromBytes(fullBytes);
       }
     }
 
