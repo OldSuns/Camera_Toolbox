@@ -41,6 +41,7 @@ class _CacheManagementWidgetState extends State<CacheManagementWidget> {
   Future<void> _updateConfig(CacheConfig newConfig) async {
     try {
       await _cacheService.updateConfig(newConfig);
+      if (!mounted) return;
       setState(() => _config = newConfig);
       _showSuccessSnackBar('设置已保存');
     } catch (e) {
@@ -90,6 +91,7 @@ class _CacheManagementWidgetState extends State<CacheManagementWidget> {
       }
 
       final stats = await _cacheService.getCacheStats(localPickerStats);
+      if (!mounted) return;
       setState(() => _stats = stats);
     } catch (e) {
       _showErrorSnackBar('刷新统计信息失败: $e');

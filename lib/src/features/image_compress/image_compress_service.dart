@@ -11,6 +11,8 @@ import '../../shared/services/image_picker_service.dart';
 
 /// 图像文件模型
 class ImageFile {
+  static const Object _noChange = Object();
+
   final String name;
   final String filePath;
   final int sizeInBytes;
@@ -22,6 +24,7 @@ class ImageFile {
   String? compressedFilePath;
   int? compressedSizeInBytes;
   String? status;
+  String? errorMessage;
 
   ImageFile({
     required this.name,
@@ -35,6 +38,7 @@ class ImageFile {
     this.compressedFilePath,
     this.compressedSizeInBytes,
     this.status,
+    this.errorMessage,
   });
 
   String get size => '${(sizeInBytes / (1024 * 1024)).toStringAsFixed(2)} MB';
@@ -58,9 +62,10 @@ class ImageFile {
     double? progress,
     bool? isCompressing,
     bool? isCompleted,
-    String? compressedFilePath,
-    int? compressedSizeInBytes,
-    String? status,
+    Object? compressedFilePath = _noChange,
+    Object? compressedSizeInBytes = _noChange,
+    Object? status = _noChange,
+    Object? errorMessage = _noChange,
   }) {
     return ImageFile(
       name: name ?? this.name,
@@ -71,10 +76,16 @@ class ImageFile {
       progress: progress ?? this.progress,
       isCompressing: isCompressing ?? this.isCompressing,
       isCompleted: isCompleted ?? this.isCompleted,
-      compressedFilePath: compressedFilePath ?? this.compressedFilePath,
-      compressedSizeInBytes:
-          compressedSizeInBytes ?? this.compressedSizeInBytes,
-      status: status ?? this.status,
+      compressedFilePath: identical(compressedFilePath, _noChange)
+          ? this.compressedFilePath
+          : compressedFilePath as String?,
+      compressedSizeInBytes: identical(compressedSizeInBytes, _noChange)
+          ? this.compressedSizeInBytes
+          : compressedSizeInBytes as int?,
+      status: identical(status, _noChange) ? this.status : status as String?,
+      errorMessage: identical(errorMessage, _noChange)
+          ? this.errorMessage
+          : errorMessage as String?,
     );
   }
 }
@@ -175,7 +186,9 @@ class ImageCompressService extends ChangeNotifier {
   int _currentIsolateIndex = 0; // 轮询使用 Isolate
 
   // 完成计数器
-  int _completedCount = 0;
+  int _finishedCount = 0;
+  int _successfulCount = 0;
+  int _failedCount = 0;
 
   List<ImageFile> get selectedImages => List.unmodifiable(_selectedImages);
   bool get isCompressing => _isCompressing;
@@ -254,7 +267,6 @@ class ImageCompressService extends ChangeNotifier {
   void _destroyIsolates() {
     debugPrint('正在销毁Isolate池...');
 
-    // 🔧 向所有Isolate发送关闭信号
     for (int i = 0; i < _sendPorts.length; i++) {
       final sendPort = _sendPorts[i];
       if (sendPort != null) {
@@ -266,35 +278,8 @@ class ImageCompressService extends ChangeNotifier {
       }
     }
 
-    // 🔧 给Isolate一些时间优雅关闭，然后强制终止
-    Future.delayed(const Duration(milliseconds: 100), () {
-      for (final isolate in _isolates) {
-        if (isolate != null) {
-          try {
-            isolate.kill(priority: Isolate.immediate);
-          } catch (e) {
-            debugPrint('强制终止Isolate失败: $e');
-          }
-        }
-      }
-
-      // 🔧 清理所有ReceivePort
-      for (final receivePort in _receivePorts) {
-        try {
-          receivePort.close();
-        } catch (e) {
-          debugPrint('关闭ReceivePort失败: $e');
-        }
-      }
-
-      // 🔧 清理所有列表
-      _isolates.clear();
-      _sendPorts.clear();
-      _receivePorts.clear();
-      _sendPortCompleters.clear();
-
-      debugPrint('Isolate池已销毁');
-    });
+    _killIsolatesNow();
+    debugPrint('Isolate池已销毁');
   }
 
   // 🔧 添加dispose标志位防止新任务启动
@@ -323,36 +308,34 @@ class ImageCompressService extends ChangeNotifier {
       }
     }
 
-    // 🔧 给Isolate一些时间优雅关闭
-    Future.delayed(const Duration(milliseconds: 100), () {
-      // 强制终止所有Isolate
-      for (final isolate in _isolates) {
-        if (isolate != null) {
-          try {
-            isolate.kill(priority: Isolate.immediate);
-          } catch (e) {
-            debugPrint('强制终止Isolate失败: $e');
-          }
-        }
-      }
-
-      // 🔧 清理所有ReceivePort
-      for (final receivePort in _receivePorts) {
-        try {
-          receivePort.close();
-        } catch (e) {
-          debugPrint('关闭ReceivePort失败: $e');
-        }
-      }
-
-      // 🔧 清理所有列表
-      _isolates.clear();
-      _sendPorts.clear();
-      _receivePorts.clear();
-      _sendPortCompleters.clear();
-    });
+    _killIsolatesNow();
 
     super.dispose();
+  }
+
+  void _killIsolatesNow() {
+    for (final isolate in _isolates) {
+      if (isolate != null) {
+        try {
+          isolate.kill(priority: Isolate.immediate);
+        } catch (e) {
+          debugPrint('强制终止Isolate失败: $e');
+        }
+      }
+    }
+
+    for (final receivePort in _receivePorts) {
+      try {
+        receivePort.close();
+      } catch (e) {
+        debugPrint('关闭ReceivePort失败: $e');
+      }
+    }
+
+    _isolates.clear();
+    _sendPorts.clear();
+    _receivePorts.clear();
+    _sendPortCompleters.clear();
   }
 
   /// 处理压缩结果
@@ -388,8 +371,10 @@ class ImageCompressService extends ChangeNotifier {
           compressedFilePath: finalOutputPath,
           compressedSizeInBytes: result.compressedSize,
           status: result.skipped ? 'skipped' : 'completed',
+          errorMessage: null,
         );
-        _completedCount++;
+        _successfulCount++;
+        _finishedCount++;
 
         if (result.skipped) {
           _statusMessage = '跳过: ${result.fileName} (无需压缩)';
@@ -404,16 +389,19 @@ class ImageCompressService extends ChangeNotifier {
           isCompressing: false,
           isCompleted: false,
           status: 'error',
+          errorMessage: result.errorMessage ?? '未知错误',
         );
+        _failedCount++;
+        _finishedCount++;
         _statusMessage = '压缩失败: ${result.fileName} - ${result.errorMessage}';
       }
 
       // 更新总体进度
-      _overallProgress = _completedCount / _selectedImages.length;
+      _overallProgress = _finishedCount / _selectedImages.length;
       notifyListeners();
 
       // 检查是否所有任务都已完成
-      if (_completedCount >= _selectedImages.length &&
+      if (_finishedCount >= _selectedImages.length &&
           _taskQueue.isEmpty &&
           _processingCount == 0) {
         _isCompressing = false;
@@ -421,7 +409,8 @@ class ImageCompressService extends ChangeNotifier {
             Platform.isAndroid || Platform.isIOS || Platform.isMacOS
             ? '并已保存到相册'
             : '';
-        _statusMessage = '压缩完成！共处理 ${_selectedImages.length} 张图片$platform';
+        _statusMessage =
+            '压缩完成：成功/跳过 $_successfulCount 张，失败 $_failedCount 张$platform';
         // 🔧 压缩完成后立即销毁Isolate池
         _destroyIsolates();
         notifyListeners();
@@ -667,6 +656,13 @@ class ImageCompressService extends ChangeNotifier {
     bool skipped = false,
     Uint8List? compressedBytes,
   }) {
+    if (!_isCompressing && _selectedImages.isNotEmpty) {
+      _isCompressing = true;
+      _finishedCount = 0;
+      _successfulCount = 0;
+      _failedCount = 0;
+      _overallProgress = 0.0;
+    }
     return _handleCompressionResult(
       _CompressionResult(
         filePath: filePath,
@@ -726,9 +722,21 @@ class ImageCompressService extends ChangeNotifier {
       return;
     }
 
+    final requiresDirectory =
+        !(Platform.isAndroid || Platform.isIOS || Platform.isMacOS) &&
+        !config.outputToOriginalDir &&
+        (config.outputDirectory == null || config.outputDirectory!.isEmpty);
+    if (requiresDirectory) {
+      _statusMessage = '请先选择输出目录，或改为输出到原目录';
+      notifyListeners();
+      return;
+    }
+
     _isCompressing = true;
     _overallProgress = 0.0;
-    _completedCount = 0;
+    _finishedCount = 0;
+    _successfulCount = 0;
+    _failedCount = 0;
     _statusMessage = '正在初始化压缩环境...';
     notifyListeners();
 
@@ -748,6 +756,7 @@ class ImageCompressService extends ChangeNotifier {
         compressedFilePath: null,
         compressedSizeInBytes: null,
         status: null,
+        errorMessage: null,
       );
     }
 
@@ -966,6 +975,9 @@ class ImageCompressService extends ChangeNotifier {
           }
         } else {
           final outputDir = config.outputDirectory ?? path.dirname(filePath);
+          if (outputDir.trim().isEmpty) {
+            return {'success': false, 'error': '未设置输出目录'};
+          }
           final fileName = path.basenameWithoutExtension(filePath);
           outputPath = path.join(outputDir, '${fileName}_compressed.jpg');
         }

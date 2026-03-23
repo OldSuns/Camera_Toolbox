@@ -139,7 +139,7 @@ class _BatchTaskItem extends StatelessWidget {
 
   void _onTap(BuildContext context, PhotoWatermarkProvider provider) {
     // 如果正在处理中，不允许切换
-    if (provider.status == ProcessingStatus.processing) {
+    if (provider.isBatchProcessing) {
       return;
     }
 

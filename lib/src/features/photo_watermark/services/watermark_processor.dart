@@ -988,13 +988,17 @@ class NormalWatermarkProcessor extends WatermarkProcessor {
 
     // 优先添加阴影（如果启用）
     if (config.shadowEnabled) {
+      final shadowSource = result;
       result = await addShadow(result);
+      shadowSource.dispose();
     }
 
     // 再添加白边（如果启用），这样阴影就会在白边内部
     if (config.whiteMarginEnabled) {
       final borderWidth = container.width * config.whiteMarginWidth / 100;
+      final borderSource = result;
       result = await addBorder(result, borderWidth, config.backgroundColor);
+      borderSource.dispose();
     }
 
     // 释放水印图像

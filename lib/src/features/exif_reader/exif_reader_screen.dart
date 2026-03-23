@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
@@ -24,8 +25,14 @@ class _ExifReaderScreenState extends State<ExifReaderScreen> {
   File? _selectedImage;
   ExifData? _exifData;
   Uint8List? _previewImageBytes;
+  Size? _previewImageSize;
+  Size? _sourceImageSize;
+  Map<String, String> _basicImageInfo = const {};
   bool _isLoading = false;
   String? _errorMessage;
+
+  bool get _supportsGallerySelection =>
+      Platform.isAndroid || Platform.isIOS || Platform.isMacOS;
 
   /// A generic method to pick an image using a provided picker function.
   ///
@@ -61,7 +68,11 @@ class _ExifReaderScreenState extends State<ExifReaderScreen> {
 
   /// Selects an image from the gallery and loads its EXIF data.
   Future<void> _selectImage() async {
-    await _pickAndLoadImage(ImagePickerService.pickImageFromGallery);
+    await _pickAndLoadImage(
+      _supportsGallerySelection
+          ? ImagePickerService.pickImageFromGallery
+          : ImagePickerService.pickImageFromFile,
+    );
   }
 
   /// Selects an image using the system file picker and loads its EXIF data.
@@ -80,25 +91,36 @@ class _ExifReaderScreenState extends State<ExifReaderScreen> {
       _selectedImage = image;
       _exifData = null;
       _previewImageBytes = null;
+      _previewImageSize = null;
+      _sourceImageSize = null;
+      _basicImageInfo = const {};
       _errorMessage = null;
       _isLoading = true; // Ensure loading indicator is shown
     });
 
     try {
+      final imageInfo = await ExifService.getImageInfo(image.path);
       final exifData = await ExifService.readExifFromFile(image.path);
+      final previewImageSize = await _decodeEmbeddedPreviewSize(
+        exifData.thumbnailBytes,
+      );
+      final sourceImageSize = await _decodeFileImageSize(image);
       if (mounted) {
         setState(() {
-          if (exifData.hasExif) {
-            _exifData = exifData;
-            _previewImageBytes = exifData.thumbnailBytes;
-          } else {
-            _errorMessage = exifData.errorMessage ?? '无法解析此文件';
-          }
+          _basicImageInfo = imageInfo;
+          _exifData = exifData;
+          _previewImageBytes = exifData.thumbnailBytes;
+          _previewImageSize = previewImageSize;
+          _sourceImageSize = sourceImageSize;
+          _errorMessage = exifData.hasExif
+              ? null
+              : (exifData.errorMessage ?? '未读取到EXIF信息');
         });
       }
     } catch (e) {
       if (mounted) {
         setState(() {
+          _basicImageInfo = const {};
           _errorMessage = '处理文件时发生未知错误';
         });
       }
@@ -118,6 +140,9 @@ class _ExifReaderScreenState extends State<ExifReaderScreen> {
       _selectedImage = null;
       _exifData = null;
       _previewImageBytes = null;
+      _previewImageSize = null;
+      _sourceImageSize = null;
+      _basicImageInfo = const {};
       _errorMessage = null;
       _isLoading = false; // Ensure loading state is reset
     });
@@ -176,9 +201,9 @@ class _ExifReaderScreenState extends State<ExifReaderScreen> {
         FilledButton.icon(
           onPressed: _isLoading ? null : _selectImage,
           icon: const Icon(Icons.add_photo_alternate),
-          label: const Text('选择图片'),
+          label: Text(_supportsGallerySelection ? '选择图片' : '选择文件'),
         ),
-        if (_exifData != null)
+        if (_exifData?.translatedData.isNotEmpty ?? false)
           IconButton(
             icon: const Icon(Icons.share),
             onPressed: _shareExifInfo,
@@ -213,25 +238,6 @@ class _ExifReaderScreenState extends State<ExifReaderScreen> {
       );
     }
 
-    if (_errorMessage != null) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.error_outline, size: 48, color: Colors.red),
-            const SizedBox(height: 16),
-            Text(
-              _errorMessage!,
-              style: const TextStyle(color: Colors.red),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton(onPressed: _selectImage, child: const Text('重新选择')),
-          ],
-        ),
-      );
-    }
-
     if (_selectedImage == null) {
       return Center(
         child: Column(
@@ -243,16 +249,26 @@ class _ExifReaderScreenState extends State<ExifReaderScreen> {
               '请选择一张图片',
               style: TextStyle(fontSize: 18, color: Colors.grey),
             ),
+            if (_errorMessage != null) ...[
+              const SizedBox(height: 16),
+              Text(
+                _errorMessage!,
+                style: const TextStyle(color: Colors.red),
+                textAlign: TextAlign.center,
+              ),
+            ],
             const SizedBox(height: 32),
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                ElevatedButton.icon(
-                  onPressed: _selectImage,
-                  icon: const Icon(Icons.photo_library),
-                  label: const Text('从相册选择'),
-                ),
-                const SizedBox(width: 16),
+                if (_supportsGallerySelection) ...[
+                  ElevatedButton.icon(
+                    onPressed: _selectImage,
+                    icon: const Icon(Icons.photo_library),
+                    label: const Text('从相册选择'),
+                  ),
+                  const SizedBox(width: 16),
+                ],
                 ElevatedButton.icon(
                   onPressed: _selectImageFromFile,
                   icon: const Icon(Icons.folder_open),
@@ -294,6 +310,18 @@ class _ExifReaderScreenState extends State<ExifReaderScreen> {
             ),
           ),
           const SizedBox(height: 16),
+          if (_errorMessage != null) ...[
+            Card(
+              color: Colors.orange.shade50,
+              child: ListTile(
+                leading: const Icon(Icons.info_outline, color: Colors.orange),
+                title: Text(_errorMessage!),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+          _buildBasicInfoCard(),
+          const SizedBox(height: 16),
 
           // EXIF信息
           if (_exifData != null)
@@ -306,47 +334,122 @@ class _ExifReaderScreenState extends State<ExifReaderScreen> {
     );
   }
 
+  Widget _buildBasicInfoCard() {
+    return Card(
+      elevation: 2,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '文件信息',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            _buildInfoRow('文件名', p.basename(_selectedImage!.path)),
+            ..._basicImageInfo.entries.map(
+              (entry) => _buildInfoRow(entry.key, entry.value),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInfoRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 88,
+            child: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+          Expanded(child: Text(value)),
+        ],
+      ),
+    );
+  }
+
   Widget _buildPreviewImage() {
-    // 如果有预览图字节，优先尝试渲染
-    if (_previewImageBytes != null) {
-      try {
-        // 使用 Image.memory 并提供 errorBuilder 作为第一层防护
-        return Image.memory(
-          _previewImageBytes!,
-          height: 300,
-          fit: BoxFit.contain,
-          errorBuilder: (context, error, stackTrace) {
-            // 如果解码失败，显示占位符
-            return _buildRawImagePlaceholder();
-          },
+    if (_selectedImage == null) {
+      return const SizedBox.shrink();
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableWidth = constraints.maxWidth.isFinite
+            ? constraints.maxWidth
+            : MediaQuery.of(context).size.width;
+        final previewHeight = (availableWidth * 0.62).clamp(220.0, 300.0);
+        final aspectRatio = _resolvedPreviewAspectRatio();
+        final previewWidth = aspectRatio == null
+            ? availableWidth
+            : (previewHeight * aspectRatio).clamp(0.0, availableWidth);
+        final devicePixelRatio = MediaQuery.of(context).devicePixelRatio;
+        final targetWidth = (previewWidth * devicePixelRatio).round();
+        final targetHeight = (previewHeight * devicePixelRatio).round();
+        final shouldUseEmbeddedPreview = _shouldUseEmbeddedPreview(
+          targetWidth: targetWidth,
+          targetHeight: targetHeight,
         );
-      } catch (e) {
-        // 如果发生更底层的异常（如 Invalid image data），也显示占位符
+
+        return Center(
+          child: SizedBox(
+            width: previewWidth,
+            height: previewHeight,
+            child: shouldUseEmbeddedPreview && _previewImageBytes != null
+                ? _buildEmbeddedPreview()
+                : _buildFilePreview(
+                    cacheWidth: targetWidth,
+                    cacheHeight: targetHeight,
+                  ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildEmbeddedPreview() {
+    return Image.memory(
+      _previewImageBytes!,
+      fit: BoxFit.contain,
+      gaplessPlayback: true,
+      filterQuality: FilterQuality.medium,
+      errorBuilder: (context, error, stackTrace) {
         return _buildRawImagePlaceholder();
-      }
-    }
+      },
+    );
+  }
 
-    // 如果没有预览图，但有原始图片文件，则尝试直接显示文件
-    // 这适用于非RAW格式的普通图片
-    if (_selectedImage != null) {
-      return Image.file(
-        _selectedImage!,
-        height: 300,
-        fit: BoxFit.contain,
-        errorBuilder: (context, error, stackTrace) {
-          // 如果连文件本身都无法渲染，同样显示占位符
-          return _buildRawImagePlaceholder();
-        },
-      );
-    }
-
-    // 如果什么都没有，则返回一个空的小部件
-    return const SizedBox.shrink();
+  Widget _buildFilePreview({
+    required int cacheWidth,
+    required int cacheHeight,
+  }) {
+    return Image.file(
+      _selectedImage!,
+      fit: BoxFit.contain,
+      gaplessPlayback: true,
+      filterQuality: FilterQuality.medium,
+      cacheWidth: cacheWidth > 0 ? cacheWidth : null,
+      cacheHeight: cacheHeight > 0 ? cacheHeight : null,
+      errorBuilder: (context, error, stackTrace) {
+        if (_previewImageBytes != null) {
+          return _buildEmbeddedPreview();
+        }
+        return _buildRawImagePlaceholder();
+      },
+    );
   }
 
   Widget _buildRawImagePlaceholder() {
     return Container(
-      height: 300,
+      height: double.infinity,
       color: Colors.grey[200],
       child: const Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -357,5 +460,133 @@ class _ExifReaderScreenState extends State<ExifReaderScreen> {
         ],
       ),
     );
+  }
+
+  bool _shouldUseEmbeddedPreview({
+    required int targetWidth,
+    required int targetHeight,
+  }) {
+    if (_previewImageBytes == null || _selectedImage == null) {
+      return false;
+    }
+
+    if (_isRawLikeFile(_selectedImage!.path)) {
+      return true;
+    }
+
+    if (_previewImageSize == null) {
+      return false;
+    }
+
+    return _previewImageSize!.width >= targetWidth * 0.75 ||
+        _previewImageSize!.height >= targetHeight * 0.75;
+  }
+
+  bool _isRawLikeFile(String filePath) {
+    const rawExtensions = {
+      'arw',
+      'raw',
+      'dng',
+      'crw',
+      'cr2',
+      'cr3',
+      'nrw',
+      'nef',
+      'raf',
+      'orf',
+      'rw2',
+      'pef',
+      'ptx',
+      'srf',
+      'sr2',
+      'srw',
+      'gpr',
+      '3fr',
+      'fff',
+      'dcr',
+      'kdc',
+      'mrw',
+      'mos',
+      'x3f',
+    };
+    return rawExtensions.contains(filePath.toLowerCase().split('.').last);
+  }
+
+  double? _resolvedPreviewAspectRatio() {
+    if (_sourceImageSize != null &&
+        _sourceImageSize!.width > 0 &&
+        _sourceImageSize!.height > 0) {
+      return _sourceImageSize!.width / _sourceImageSize!.height;
+    }
+
+    if (_previewImageSize != null &&
+        _previewImageSize!.width > 0 &&
+        _previewImageSize!.height > 0) {
+      return _previewImageSize!.width / _previewImageSize!.height;
+    }
+
+    final exifWidth = _tryParseDimension(_exifData?.translatedData['图片宽度']);
+    final exifHeight = _tryParseDimension(_exifData?.translatedData['图片高度']);
+    if (exifWidth != null && exifHeight != null && exifHeight > 0) {
+      return exifWidth / exifHeight;
+    }
+
+    return null;
+  }
+
+  double? _tryParseDimension(String? value) {
+    if (value == null || value.isEmpty) {
+      return null;
+    }
+
+    final match = RegExp(r'(\d+(\.\d+)?)').firstMatch(value);
+    if (match == null) {
+      return null;
+    }
+
+    return double.tryParse(match.group(1)!);
+  }
+
+  Future<Size?> _decodeEmbeddedPreviewSize(Uint8List? bytes) async {
+    if (bytes == null || bytes.isEmpty) {
+      return null;
+    }
+
+    try {
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      final image = frame.image;
+      final size = Size(image.width.toDouble(), image.height.toDouble());
+      image.dispose();
+      return size;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Size?> _decodeFileImageSize(File file) async {
+    try {
+      final bytes = await file.readAsBytes();
+      return _decodeImageSize(bytes);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Size?> _decodeImageSize(Uint8List bytes) async {
+    if (bytes.isEmpty) {
+      return null;
+    }
+
+    try {
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      final image = frame.image;
+      final size = Size(image.width.toDouble(), image.height.toDouble());
+      image.dispose();
+      return size;
+    } catch (_) {
+      return null;
+    }
   }
 }

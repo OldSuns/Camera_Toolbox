@@ -21,6 +21,7 @@ class ExifDisplayWidget extends StatelessWidget {
   }
 
   Widget _buildEmptyState() {
+    final message = exifData.errorMessage ?? '这张图片可能不包含EXIF信息，或者信息已被移除';
     return Card(
       elevation: 2,
       child: Padding(
@@ -34,10 +35,10 @@ class ExifDisplayWidget extends StatelessWidget {
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
-            const Text(
-              '这张图片可能不包含EXIF信息，或者信息已被移除',
+            Text(
+              message,
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey),
+              style: const TextStyle(color: Colors.grey),
             ),
             if (onRefresh != null) ...[
               const SizedBox(height: 16),

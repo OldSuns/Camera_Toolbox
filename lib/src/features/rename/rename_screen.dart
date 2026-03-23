@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../../shared/widgets/feature_page_layout.dart';
+import '../../shared/widgets/semantic_summary_region.dart';
 import 'rename_provider.dart';
 import 'widgets/append_rename_view.dart';
 import 'widgets/auto_numbering_view.dart';
@@ -69,14 +70,30 @@ class _RenameScreenState extends State<RenameScreen>
                 ],
               ),
               Expanded(
-                child: TabBarView(
-                  controller: _tabController,
-                  children: const [
-                    ReplaceRenameView(),
-                    AppendRenameView(),
-                    AutoNumberingView(),
-                    ExifRenameView(),
-                  ],
+                child: SemanticSummaryRegion(
+                  label: '重命名规则设置区域',
+                  child: TabBarView(
+                    controller: _tabController,
+                    physics: const NeverScrollableScrollPhysics(),
+                    children: const [
+                      KeyedSubtree(
+                        key: ValueKey<String>('rename_replace_tab'),
+                        child: ReplaceRenameView(),
+                      ),
+                      KeyedSubtree(
+                        key: ValueKey<String>('rename_append_tab'),
+                        child: AppendRenameView(),
+                      ),
+                      KeyedSubtree(
+                        key: ValueKey<String>('rename_auto_number_tab'),
+                        child: AutoNumberingView(),
+                      ),
+                      KeyedSubtree(
+                        key: ValueKey<String>('rename_exif_tab'),
+                        child: ExifRenameView(),
+                      ),
+                    ],
+                  ),
                 ),
               ),
               Consumer<RenameProvider>(
@@ -173,11 +190,17 @@ class _RenameScreenState extends State<RenameScreen>
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Icon(Icons.upload_file, size: 48, color: Colors.grey),
-                  const SizedBox(height: 8),
-                  const Text(
-                    '拖放文件到此处或点击选择文件',
-                    style: TextStyle(fontSize: 16, color: Colors.grey),
+                  const ExcludeSemantics(
+                    child: Column(
+                      children: [
+                        Icon(Icons.upload_file, size: 48, color: Colors.grey),
+                        SizedBox(height: 8),
+                        Text(
+                          '拖放文件到此处或点击选择文件',
+                          style: TextStyle(fontSize: 16, color: Colors.grey),
+                        ),
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 8),
                   Row(
@@ -238,31 +261,34 @@ class _RenameScreenState extends State<RenameScreen>
                 ),
               ),
               Expanded(
-                child: DropTarget(
-                  onDragDone: _handleDrop,
-                  child: ReorderableListView.builder(
-                    buildDefaultDragHandles: false,
-                    padding: const EdgeInsets.all(8),
-                    shrinkWrap: true,
-                    physics: const ClampingScrollPhysics(),
-                    itemCount: provider.files.length,
-                    itemBuilder: (context, index) {
-                      final fileDetail = provider.files[index];
-                      final previewItem = provider.previewItemAt(index);
-                      return _RenamePreviewListItem(
-                        key: ValueKey(fileDetail.file.path),
-                        index: index,
-                        fileDetail: fileDetail,
-                        previewItem: previewItem,
-                        onRemove: () => provider.removeFile(index),
-                      );
-                    },
-                    onReorder: (oldIndex, newIndex) {
-                      if (newIndex > oldIndex) {
-                        newIndex -= 1;
-                      }
-                      provider.reorderFiles(oldIndex, newIndex);
-                    },
+                child: SemanticSummaryRegion(
+                  label: '重命名文件列表，共 ${provider.files.length} 项，可拖动排序',
+                  child: DropTarget(
+                    onDragDone: _handleDrop,
+                    child: ReorderableListView.builder(
+                      buildDefaultDragHandles: false,
+                      padding: const EdgeInsets.all(8),
+                      shrinkWrap: true,
+                      physics: const ClampingScrollPhysics(),
+                      itemCount: provider.files.length,
+                      itemBuilder: (context, index) {
+                        final fileDetail = provider.files[index];
+                        final previewItem = provider.previewItemAt(index);
+                        return _RenamePreviewListItem(
+                          key: ValueKey(fileDetail.file.path),
+                          index: index,
+                          fileDetail: fileDetail,
+                          previewItem: previewItem,
+                          onRemove: () => provider.removeFile(index),
+                        );
+                      },
+                      onReorder: (oldIndex, newIndex) {
+                        if (newIndex > oldIndex) {
+                          newIndex -= 1;
+                        }
+                        provider.reorderFiles(oldIndex, newIndex);
+                      },
+                    ),
                   ),
                 ),
               ),
@@ -276,13 +302,19 @@ class _RenameScreenState extends State<RenameScreen>
       ),
       child: SizedBox(
         height: targetHeight,
-        child: Card(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.grey),
-              borderRadius: BorderRadius.circular(8),
+        child: Semantics(
+          container: true,
+          label: provider.files.isEmpty
+              ? '重命名文件选择区域，可拖放或选择文件'
+              : '重命名文件选择区域，当前已选择 ${provider.files.length} 个文件',
+          child: Card(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: fileSelectionBody,
             ),
-            child: fileSelectionBody,
           ),
         ),
       ),
@@ -301,50 +333,58 @@ class _RenameScreenState extends State<RenameScreen>
       ),
       child: SizedBox(
         height: targetHeight,
-        child: Card(
-          color: Theme.of(context).colorScheme.surfaceContainerHighest,
-          child: Padding(
-            padding: const EdgeInsets.all(8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '处理日志 (${provider.issues.length} 条)',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-                const Divider(),
-                Expanded(
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    physics: const ClampingScrollPhysics(),
-                    itemCount: provider.issues.length,
-                    itemBuilder: (context, index) {
-                      final issue = provider.issues[index];
-                      final icon = switch (issue.severity) {
-                        RenameIssueSeverity.info => Icons.info_outline,
-                        RenameIssueSeverity.warning =>
-                          Icons.warning_amber_rounded,
-                        RenameIssueSeverity.error => Icons.error_outline,
-                      };
-                      final color = switch (issue.severity) {
-                        RenameIssueSeverity.info => Theme.of(
-                          context,
-                        ).colorScheme.primary,
-                        RenameIssueSeverity.warning => Colors.orange.shade700,
-                        RenameIssueSeverity.error => Theme.of(
-                          context,
-                        ).colorScheme.error,
-                      };
-                      return ListTile(
-                        dense: true,
-                        leading: Icon(icon, color: color),
-                        title: Text(issue.fileName ?? issue.code),
-                        subtitle: Text(_formatIssueSubtitle(issue)),
-                      );
-                    },
+        child: Semantics(
+          container: true,
+          label: '重命名处理日志区域',
+          child: Card(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '处理日志 (${provider.issues.length} 条)',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
-                ),
-              ],
+                  const Divider(),
+                  Expanded(
+                    child: SemanticSummaryRegion(
+                      label: '处理日志列表，共 ${provider.issues.length} 条',
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        physics: const ClampingScrollPhysics(),
+                        itemCount: provider.issues.length,
+                        itemBuilder: (context, index) {
+                          final issue = provider.issues[index];
+                          final icon = switch (issue.severity) {
+                            RenameIssueSeverity.info => Icons.info_outline,
+                            RenameIssueSeverity.warning =>
+                              Icons.warning_amber_rounded,
+                            RenameIssueSeverity.error => Icons.error_outline,
+                          };
+                          final color = switch (issue.severity) {
+                            RenameIssueSeverity.info => Theme.of(
+                              context,
+                            ).colorScheme.primary,
+                            RenameIssueSeverity.warning =>
+                              Colors.orange.shade700,
+                            RenameIssueSeverity.error => Theme.of(
+                              context,
+                            ).colorScheme.error,
+                          };
+                          return ListTile(
+                            dense: true,
+                            leading: Icon(icon, color: color),
+                            title: Text(issue.fileName ?? issue.code),
+                            subtitle: Text(_formatIssueSubtitle(issue)),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -557,7 +597,7 @@ class _RenameScreenState extends State<RenameScreen>
   }
 
   String _summaryText(RenamePlanSummary summary) {
-    return '将改名 ${summary.renameCount} | 跳过 ${summary.skippedCount} | 冲突 ${summary.conflictCount} | 警告 ${summary.warningCount}';
+    return '将改名 ${summary.renameCount} | 未变化 ${summary.unchangedCount} | 跳过 ${summary.skippedCount} | 冲突 ${summary.conflictCount} | 警告 ${summary.warningCount}';
   }
 
   void _showRenameConfirmationDialog(
@@ -669,21 +709,24 @@ class _RenameScreenState extends State<RenameScreen>
                     const SizedBox(height: 8),
                     SizedBox(
                       height: 180,
-                      child: ListView.builder(
-                        itemCount: result.issues.length,
-                        itemBuilder: (context, index) {
-                          final issue = result.issues[index];
-                          final fileName = issue.fileName ?? '未指定文件';
-                          final targetText = issue.targetPath == null
-                              ? ''
-                              : '\n目标: ${issue.targetPath}';
-                          return Padding(
-                            padding: const EdgeInsets.only(bottom: 8),
-                            child: Text(
-                              '$fileName: ${issue.message}$targetText',
-                            ),
-                          );
-                        },
+                      child: SemanticSummaryRegion(
+                        label: '重命名结果详情列表，共 ${result.issues.length} 条',
+                        child: ListView.builder(
+                          itemCount: result.issues.length,
+                          itemBuilder: (context, index) {
+                            final issue = result.issues[index];
+                            final fileName = issue.fileName ?? '未指定文件';
+                            final targetText = issue.targetPath == null
+                                ? ''
+                                : '\n目标: ${issue.targetPath}';
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: Text(
+                                '$fileName: ${issue.message}$targetText',
+                              ),
+                            );
+                          },
+                        ),
                       ),
                     ),
                   ],

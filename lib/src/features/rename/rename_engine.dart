@@ -146,8 +146,10 @@ class RenameEngine {
     final originalName = path.basename(fileDetail.file.path);
     switch (request.mode) {
       case RenameMode.replace:
-        return _DerivedTargetName(
-          targetName: _applyReplaceRules(originalName, request.replaceRules),
+        return _applyReplaceRulesWithValidation(
+          originalName,
+          request.replaceRules,
+          fileDetail.file.path,
         );
       case RenameMode.append:
         return _DerivedTargetName(
@@ -583,7 +585,7 @@ class RenameEngine {
           );
           return _DerivedTargetName(
             targetName: originalName,
-            action: RenamePlanAction.skip,
+            action: RenamePlanAction.rename,
             issues: messages,
           );
         case ExifMissingPolicy.skipFile:
@@ -678,6 +680,9 @@ class RenameEngine {
   ) {
     var result = fileName;
     for (final rule in replaceRules) {
+      if (rule.findText.isEmpty) {
+        continue;
+      }
       if (!rule.allowReplaceExtension) {
         final dotIndex = result.lastIndexOf('.');
         if (dotIndex != -1) {
@@ -694,6 +699,30 @@ class RenameEngine {
       }
     }
     return result;
+  }
+
+  static _DerivedTargetName _applyReplaceRulesWithValidation(
+    String fileName,
+    List<ReplaceRule> replaceRules,
+    String sourcePath,
+  ) {
+    final hasEmptyFindText = replaceRules.any((rule) => rule.findText.isEmpty);
+    final issues = <RenameIssue>[];
+    if (hasEmptyFindText) {
+      issues.add(
+        RenameIssue(
+          severity: RenameIssueSeverity.warning,
+          code: 'empty_replace_find_text',
+          message: '存在空的查找内容，已忽略对应替换规则',
+          sourcePath: sourcePath,
+        ),
+      );
+    }
+
+    return _DerivedTargetName(
+      targetName: _applyReplaceRules(fileName, replaceRules),
+      issues: issues,
+    );
   }
 
   static String _applyAppendRule(
@@ -1203,7 +1232,8 @@ class _PlanDraft {
     );
     var resolvedAction = action;
     if (resolvedAction == RenamePlanAction.rename &&
-        targetPath == fileDetail.file.path) {
+        RenameEngine._normalizePath(targetPath, isWindowsLike) ==
+            RenameEngine._normalizePath(fileDetail.file.path, isWindowsLike)) {
       resolvedAction = RenamePlanAction.unchanged;
     }
     final caseOnlyRename = RenameEngine._isCaseOnlyRename(

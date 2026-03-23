@@ -24,6 +24,7 @@ class _QuickSplitScreenState extends State<QuickSplitScreen> {
   bool _isProcessing = false;
   double _progress = 0.0;
   String _statusText = '准备就绪';
+  QuickSplitResult? _lastResult;
   ReceivePort? _receivePort;
   Isolate? _workerIsolate;
   SendPort? _workerSendPort;
@@ -172,16 +173,28 @@ class _QuickSplitScreenState extends State<QuickSplitScreen> {
   }
 
   Widget _buildProgressSection() {
-    if (!_isProcessing) return const SizedBox.shrink();
+    if (!_isProcessing && _lastResult == null && _statusText == '准备就绪') {
+      return const SizedBox.shrink();
+    }
 
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            LinearProgressIndicator(value: _progress, minHeight: 8),
-            const SizedBox(height: 8),
+            if (_isProcessing) ...[
+              LinearProgressIndicator(value: _progress, minHeight: 8),
+              const SizedBox(height: 8),
+            ],
             Text(_statusText, style: const TextStyle(fontSize: 14)),
+            if (_lastResult != null) ...[
+              const SizedBox(height: 12),
+              Text('匹配成功: ${_lastResult!.matchedCount}'),
+              Text('已复制: ${_lastResult!.copiedCount}'),
+              Text('已跳过: ${_lastResult!.skippedCount}'),
+              Text('自动改名: ${_lastResult!.renamedCount}'),
+            ],
           ],
         ),
       ),
@@ -243,6 +256,7 @@ class _QuickSplitScreenState extends State<QuickSplitScreen> {
       _isProcessing = true;
       _progress = 0.0;
       _statusText = '正在初始化...';
+      _lastResult = null;
     });
 
     _disposeWorker();
@@ -282,14 +296,24 @@ class _QuickSplitScreenState extends State<QuickSplitScreen> {
           }
           break;
         case _messageTypeDone:
+          final result = QuickSplitResult(
+            matchedCount: data['matchedCount'] as int? ?? 0,
+            copiedCount: data['copiedCount'] as int? ?? 0,
+            skippedCount: data['skippedCount'] as int? ?? 0,
+            renamedCount: data['renamedCount'] as int? ?? 0,
+          );
           if (mounted) {
             setState(() {
-              _statusText = '处理完成！';
+              _statusText =
+                  '处理完成：已复制 ${result.copiedCount} 个，跳过 ${result.skippedCount} 个。';
               _isProcessing = false;
+              _lastResult = result;
             });
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('快速分片处理完成！'),
+              SnackBar(
+                content: Text(
+                  '快速分片完成：匹配 ${result.matchedCount}，复制 ${result.copiedCount}，跳过 ${result.skippedCount}',
+                ),
                 backgroundColor: Colors.green,
               ),
             );
@@ -327,12 +351,12 @@ class _QuickSplitScreenState extends State<QuickSplitScreen> {
         content: const Text('当输出目录中已存在同名文件时，您希望如何处理？'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, ConflictAction.skip),
-            child: const Text('跳过'),
+            onPressed: () => Navigator.pop(context, ConflictAction.rename),
+            child: const Text('自动改名'),
           ),
           TextButton(
-            onPressed: () => Navigator.pop(context, ConflictAction.rename),
-            child: const Text('重命名'),
+            onPressed: () => Navigator.pop(context, ConflictAction.skip),
+            child: const Text('跳过'),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, ConflictAction.overwrite),
@@ -440,7 +464,7 @@ void _processingIsolate(Map<String, dynamic> context) async {
   });
 
   try {
-    await quickSplitService.processFiles(
+    final result = await quickSplitService.processFiles(
       imageDirectory: jpgDirectory,
       rawDirectory: rawDirectory,
       outputDirectory: outputDirectory,
@@ -453,7 +477,13 @@ void _processingIsolate(Map<String, dynamic> context) async {
         });
       },
     );
-    sendPort.send({'type': _QuickSplitScreenState._messageTypeDone});
+    sendPort.send({
+      'type': _QuickSplitScreenState._messageTypeDone,
+      'matchedCount': result.matchedCount,
+      'copiedCount': result.copiedCount,
+      'skippedCount': result.skippedCount,
+      'renamedCount': result.renamedCount,
+    });
   } on QuickSplitCancelledException {
     sendPort.send({'type': _QuickSplitScreenState._messageTypeCancelled});
   } catch (e) {

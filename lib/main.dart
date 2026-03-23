@@ -98,6 +98,13 @@ class _CameraToolboxAppState extends State<CameraToolboxApp> {
         return MaterialApp(
           title: '相机工具箱',
           debugShowCheckedModeBanner: false, // 隐藏调试横幅
+          builder: (context, child) {
+            final appChild = child ?? const SizedBox.shrink();
+            if (Platform.isWindows) {
+              return ExcludeSemantics(child: appChild);
+            }
+            return appChild;
+          },
           theme: themeProvider.lightTheme.copyWith(
             textTheme: themeProvider.lightTheme.textTheme.apply(
               fontFamily: fontFamily,

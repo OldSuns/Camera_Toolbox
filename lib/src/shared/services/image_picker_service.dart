@@ -6,6 +6,9 @@ import 'package:permission_handler/permission_handler.dart';
 /// 图片选择服务
 /// 提供多种方式选择图片文件
 class ImagePickerService {
+  static bool get _supportsNativeGallery =>
+      Platform.isAndroid || Platform.isIOS || Platform.isMacOS;
+
   /// 使用相机拍照
   static Future<File?> pickImageFromCamera() async {
     try {
@@ -33,6 +36,9 @@ class ImagePickerService {
 
   /// 从相册选择图片
   static Future<File?> pickImageFromGallery() async {
+    if (!_supportsNativeGallery) {
+      return pickImageFromFile();
+    }
     try {
       // 首先检查和请求权限
       final status = await Permission.photos.request();
@@ -57,6 +63,10 @@ class ImagePickerService {
 
   /// 从相册选择多张图片
   static Future<List<File>> pickMultipleImagesFromGallery() async {
+    if (!_supportsNativeGallery) {
+      final file = await pickImageFromFile();
+      return file == null ? [] : [file];
+    }
     try {
       // 首先检查和请求权限
       final status = await Permission.photos.request();
@@ -109,14 +119,16 @@ class ImagePickerService {
     }
 
     // 检查相册权限
-    try {
-      if (await Permission.photos.isGranted ||
-          await Permission.photos.isLimited ||
-          !(await Permission.photos.isPermanentlyDenied)) {
-        methods.add('相册选择');
+    if (_supportsNativeGallery) {
+      try {
+        if (await Permission.photos.isGranted ||
+            await Permission.photos.isLimited ||
+            !(await Permission.photos.isPermanentlyDenied)) {
+          methods.add('相册选择');
+        }
+      } catch (e) {
+        // 忽略异常，方法不可用
       }
-    } catch (e) {
-      // 忽略异常，方法不可用
     }
 
     return methods;

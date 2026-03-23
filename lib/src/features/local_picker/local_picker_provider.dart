@@ -56,18 +56,24 @@ const Set<String> _supportedRawExtensions = {
 
 class _ThumbnailRequest {
   final String path;
-  final int width;
+  final int targetDimension;
   final String cachePath;
+  final String requestKey;
 
-  const _ThumbnailRequest(this.path, this.width, this.cachePath);
+  const _ThumbnailRequest(
+    this.path,
+    this.targetDimension,
+    this.cachePath,
+    this.requestKey,
+  );
 }
 
 class _ThumbnailResult {
-  final String path;
+  final String requestKey;
   final Uint8List bytes;
   final String cacheKey;
 
-  const _ThumbnailResult(this.path, this.bytes, this.cacheKey);
+  const _ThumbnailResult(this.requestKey, this.bytes, this.cacheKey);
 }
 
 class _BatchThumbnailRequest {
@@ -115,20 +121,20 @@ Future<void> _processSingleThumbnail(
     final file = File(message.path);
     final fileSize = await file.length();
     if (fileSize > 50 * 1024 * 1024) {
-      sendPort.send(_ThumbnailResult('', Uint8List(0), ''));
+      sendPort.send(_ThumbnailResult(message.requestKey, Uint8List(0), ''));
       return;
     }
 
     final fileBytes = await file.readAsBytes();
     final image = img.decodeImage(fileBytes);
     if (image == null) {
-      sendPort.send(_ThumbnailResult(message.path, Uint8List(0), ''));
+      sendPort.send(_ThumbnailResult(message.requestKey, Uint8List(0), ''));
       return;
     }
 
     final thumbnail = img.copyResize(
       image,
-      width: message.width,
+      width: message.targetDimension,
       interpolation: img.Interpolation.nearest,
     );
     final jpgBytes = Uint8List.fromList(img.encodeJpg(thumbnail, quality: 70));
@@ -137,11 +143,15 @@ Future<void> _processSingleThumbnail(
     await cacheFile.parent.create(recursive: true);
     unawaited(cacheFile.writeAsBytes(jpgBytes));
     sendPort.send(
-      _ThumbnailResult(message.path, jpgBytes, p.basename(cacheFile.path)),
+      _ThumbnailResult(
+        message.requestKey,
+        jpgBytes,
+        p.basename(cacheFile.path),
+      ),
     );
   } catch (error) {
     debugPrint('Error in thumbnail isolate for ${message.path}: $error');
-    sendPort.send(_ThumbnailResult(message.path, Uint8List(0), ''));
+    sendPort.send(_ThumbnailResult(message.requestKey, Uint8List(0), ''));
   }
 }
 
@@ -285,6 +295,8 @@ class LocalPickerProvider with ChangeNotifier {
   late final int _isolateCount;
   final List<_ThumbnailRequest> _requestQueue = [];
   final Set<String> _pendingGeneration = {};
+  final Set<String> _queuedGeneration = {};
+  final Set<String> _failedThumbnailPaths = {};
   int _currentIsolateIndex = 0;
   final int _batchSize = 2;
   bool _isolatesInitialized = false;
@@ -313,13 +325,41 @@ class LocalPickerProvider with ChangeNotifier {
     }
   }
 
-  File _getCacheFileForPath(String imagePath) {
-    final hash = md5.convert(utf8.encode(imagePath)).toString();
-    return File(p.join(_cacheDir!.path, '$hash.jpg'));
+  File _getCacheFileForPath(String imagePath, int targetDimension) {
+    final cacheKey = _getCacheKeyForPath(imagePath, targetDimension);
+    return File(p.join(_cacheDir!.path, cacheKey));
   }
 
-  String _getCacheKeyForPath(String imagePath) {
-    return '${md5.convert(utf8.encode(imagePath)).toString()}.jpg';
+  String _getCacheKeyForPath(String imagePath, int targetDimension) {
+    final hash = md5
+        .convert(utf8.encode('$imagePath|$targetDimension'))
+        .toString();
+    return '${hash}_$targetDimension.jpg';
+  }
+
+  String _getThumbnailRequestKey(String imagePath, int targetDimension) {
+    return '$imagePath::$targetDimension';
+  }
+
+  int normalizeThumbnailDimension(int targetDimension) {
+    const buckets = [160, 240, 320, 480, 640];
+    for (final bucket in buckets) {
+      if (targetDimension <= bucket) {
+        return bucket;
+      }
+    }
+    return buckets.last;
+  }
+
+  String thumbnailRequestKey(String imagePath, int targetDimension) {
+    return _getThumbnailRequestKey(
+      imagePath,
+      normalizeThumbnailDimension(targetDimension),
+    );
+  }
+
+  int _preferredVisibleThumbnailDimension() {
+    return normalizeThumbnailDimension((_thumbnailSize * 1.5).round());
   }
 
   Future<void> ensureIsolatesInitialized() async {
@@ -366,13 +406,17 @@ class LocalPickerProvider with ChangeNotifier {
         if (_processingCount > 0) {
           _processingCount--;
         }
-        if (message.path.isNotEmpty) {
-          _pendingGeneration.remove(message.path);
+        _pendingGeneration.remove(message.requestKey);
+        _queuedGeneration.remove(message.requestKey);
+        if (message.requestKey.isNotEmpty) {
           if (message.bytes.isNotEmpty) {
-            _thumbnailCache[message.path] = message.bytes;
+            _failedThumbnailPaths.remove(message.requestKey);
+            _thumbnailCache[message.requestKey] = message.bytes;
             if (message.cacheKey.isNotEmpty) {
               _diskCacheIndex.add(message.cacheKey);
             }
+          } else {
+            _failedThumbnailPaths.add(message.requestKey);
           }
         }
         _processNextRequest();
@@ -470,6 +514,8 @@ class LocalPickerProvider with ChangeNotifier {
     _isExporting = false;
     _requestQueue.clear();
     _pendingGeneration.clear();
+    _queuedGeneration.clear();
+    _failedThumbnailPaths.clear();
     _processingCount = 0;
     if (clearDirectory) {
       _currentDirectory = null;
@@ -608,7 +654,11 @@ class LocalPickerProvider with ChangeNotifier {
   }
 
   void updateThumbnailSize(double size) {
+    final previousDimension = _preferredVisibleThumbnailDimension();
     _thumbnailSize = size;
+    if (_preferredVisibleThumbnailDimension() > previousDimension) {
+      _warmVisibleThumbnails(startIndex: 0, count: _visibleCount);
+    }
     notifyListeners();
   }
 
@@ -649,6 +699,8 @@ class LocalPickerProvider with ChangeNotifier {
     _thumbnailCache.clear();
     _requestQueue.clear();
     _pendingGeneration.clear();
+    _queuedGeneration.clear();
+    _failedThumbnailPaths.clear();
     _processingCount = 0;
 
     final providers = _imageProviderCache.values.toList(growable: false);
@@ -767,13 +819,20 @@ class LocalPickerProvider with ChangeNotifier {
     return trimmed.isEmpty ? null : trimmed;
   }
 
-  Future<Uint8List?> getThumbnail(String imagePath) async {
-    if (_thumbnailCache.containsKey(imagePath)) {
+  Future<Uint8List?> getThumbnail(
+    String imagePath, {
+    required int targetDimension,
+  }) async {
+    final normalizedDimension = normalizeThumbnailDimension(targetDimension);
+    final requestKey = _getThumbnailRequestKey(imagePath, normalizedDimension);
+    if (_thumbnailCache.containsKey(requestKey)) {
       _cacheHitCount++;
-      return _thumbnailCache[imagePath];
+      return _thumbnailCache[requestKey];
     }
 
-    if (_pendingGeneration.contains(imagePath)) {
+    if (_pendingGeneration.contains(requestKey) ||
+        _queuedGeneration.contains(requestKey) ||
+        _failedThumbnailPaths.contains(requestKey)) {
       return null;
     }
 
@@ -781,30 +840,31 @@ class LocalPickerProvider with ChangeNotifier {
       await _initCacheDir();
     }
 
-    final cacheKey = _getCacheKeyForPath(imagePath);
+    final cacheKey = _getCacheKeyForPath(imagePath, normalizedDimension);
     if (!_diskCacheIndex.contains(cacheKey)) {
       _cacheMissCount++;
-      _queueThumbnailGeneration(imagePath);
+      _queueThumbnailGeneration(imagePath, normalizedDimension);
       return null;
     }
 
-    unawaited(_loadFromDiskCache(imagePath));
+    unawaited(_loadFromDiskCache(imagePath, normalizedDimension));
     return null;
   }
 
-  Future<void> _loadFromDiskCache(String imagePath) async {
-    final cacheFile = _getCacheFileForPath(imagePath);
+  Future<void> _loadFromDiskCache(String imagePath, int targetDimension) async {
+    final requestKey = _getThumbnailRequestKey(imagePath, targetDimension);
+    final cacheFile = _getCacheFileForPath(imagePath, targetDimension);
     _diskReadCount++;
     try {
       if (!await cacheFile.exists()) {
-        _diskCacheIndex.remove(_getCacheKeyForPath(imagePath));
+        _diskCacheIndex.remove(_getCacheKeyForPath(imagePath, targetDimension));
         _cacheMissCount++;
         return;
       }
 
       final bytes = await cacheFile.readAsBytes();
       if (bytes.isEmpty) {
-        _diskCacheIndex.remove(_getCacheKeyForPath(imagePath));
+        _diskCacheIndex.remove(_getCacheKeyForPath(imagePath, targetDimension));
         try {
           await cacheFile.delete();
         } catch (_) {}
@@ -812,12 +872,12 @@ class LocalPickerProvider with ChangeNotifier {
         return;
       }
 
-      _thumbnailCache[imagePath] = bytes;
+      _thumbnailCache[requestKey] = bytes;
       _cacheHitCount++;
       _scheduleThumbnailNotify();
     } catch (error) {
       debugPrint('Error reading thumbnail cache for $imagePath: $error');
-      _diskCacheIndex.remove(_getCacheKeyForPath(imagePath));
+      _diskCacheIndex.remove(_getCacheKeyForPath(imagePath, targetDimension));
       try {
         if (await cacheFile.exists()) {
           await cacheFile.delete();
@@ -827,8 +887,12 @@ class LocalPickerProvider with ChangeNotifier {
     }
   }
 
-  void _queueThumbnailGeneration(String imagePath) {
-    if (_pendingGeneration.contains(imagePath) || _cacheDir == null) {
+  void _queueThumbnailGeneration(String imagePath, int targetDimension) {
+    final requestKey = _getThumbnailRequestKey(imagePath, targetDimension);
+    if (_pendingGeneration.contains(requestKey) ||
+        _queuedGeneration.contains(requestKey) ||
+        _failedThumbnailPaths.contains(requestKey) ||
+        _cacheDir == null) {
       return;
     }
     if (_requestQueue.length > 50) {
@@ -837,9 +901,11 @@ class LocalPickerProvider with ChangeNotifier {
 
     final request = _ThumbnailRequest(
       imagePath,
-      250,
-      _getCacheFileForPath(imagePath).path,
+      targetDimension,
+      _getCacheFileForPath(imagePath, targetDimension).path,
+      requestKey,
     );
+    _queuedGeneration.add(requestKey);
     _requestQueue.add(request);
     _processNextRequest();
   }
@@ -860,7 +926,8 @@ class LocalPickerProvider with ChangeNotifier {
         _processingCount < _maxConcurrent) {
       final request = _requestQueue.removeAt(0);
       batchRequests.add(request);
-      _pendingGeneration.add(request.path);
+      _queuedGeneration.remove(request.requestKey);
+      _pendingGeneration.add(request.requestKey);
       _processingCount++;
     }
 
@@ -884,21 +951,25 @@ class LocalPickerProvider with ChangeNotifier {
       return;
     }
 
+    final targetDimension = _preferredVisibleThumbnailDimension();
     final endExclusive = (startIndex + count).clamp(
       0,
       _filteredImageEntries.length,
     );
     for (var index = startIndex; index < endExclusive; index++) {
       final imagePath = _filteredImageEntries[index].path;
-      if (_thumbnailCache.containsKey(imagePath) ||
-          _pendingGeneration.contains(imagePath)) {
+      final requestKey = _getThumbnailRequestKey(imagePath, targetDimension);
+      if (_thumbnailCache.containsKey(requestKey) ||
+          _pendingGeneration.contains(requestKey) ||
+          _queuedGeneration.contains(requestKey) ||
+          _failedThumbnailPaths.contains(requestKey)) {
         continue;
       }
-      final cacheKey = _getCacheKeyForPath(imagePath);
+      final cacheKey = _getCacheKeyForPath(imagePath, targetDimension);
       if (_diskCacheIndex.contains(cacheKey)) {
-        unawaited(_loadFromDiskCache(imagePath));
+        unawaited(_loadFromDiskCache(imagePath, targetDimension));
       } else {
-        _queueThumbnailGeneration(imagePath);
+        _queueThumbnailGeneration(imagePath, targetDimension);
       }
     }
   }
@@ -1016,6 +1087,7 @@ class LocalPickerProvider with ChangeNotifier {
         final entry = selectedEntries[index];
         var itemRenamed = false;
         String? imageTargetPath;
+        String? rawTargetPath;
         try {
           final desiredImageTargetPath = p.join(
             options.targetDirectory,
@@ -1033,9 +1105,48 @@ class LocalPickerProvider with ChangeNotifier {
           imageTargetPath = resolved.imageFileName == null
               ? desiredImageTargetPath
               : p.join(options.targetDirectory, resolved.imageFileName!);
+          rawTargetPath = resolved.rawFileName == null
+              ? (desiredRawFileName == null
+                    ? null
+                    : p.join(options.targetDirectory, desiredRawFileName))
+              : p.join(options.targetDirectory, resolved.rawFileName!);
+
+          final imageSelfOverwrite =
+              options.conflictAction == ConflictAction.overwrite &&
+              _isSamePath(entry.path, imageTargetPath);
+          final rawSelfOverwrite =
+              options.includeRaw &&
+              entry.rawPath != null &&
+              rawTargetPath != null &&
+              options.conflictAction == ConflictAction.overwrite &&
+              _isSamePath(entry.rawPath!, rawTargetPath);
+
+          if (imageSelfOverwrite || rawSelfOverwrite) {
+            skippedCount += options.includeRaw && entry.rawPath != null ? 2 : 1;
+            issues.add(
+              LocalPickerExportIssue(
+                sourcePath: entry.path,
+                message: '目标目录与源目录相同，已阻止覆盖原文件',
+                targetPath: imageTargetPath,
+              ),
+            );
+            if (rawSelfOverwrite && entry.rawPath != null) {
+              issues.add(
+                LocalPickerExportIssue(
+                  sourcePath: entry.rawPath!,
+                  message: 'RAW 目标目录与源目录相同，已阻止覆盖原文件',
+                  targetPath: rawTargetPath,
+                  isRaw: true,
+                ),
+              );
+            }
+            _exportProgress = (index + 1) / selectedEntries.length;
+            notifyListeners();
+            continue;
+          }
 
           if (resolved.imageSkipped || resolved.imageFileName == null) {
-            skippedCount++;
+            skippedCount += options.includeRaw && entry.rawPath != null ? 2 : 1;
             issues.add(
               LocalPickerExportIssue(
                 sourcePath: entry.path,
@@ -1043,6 +1154,16 @@ class LocalPickerProvider with ChangeNotifier {
                 targetPath: imageTargetPath,
               ),
             );
+            if (options.includeRaw && entry.rawPath != null) {
+              issues.add(
+                LocalPickerExportIssue(
+                  sourcePath: entry.rawPath!,
+                  message: 'RAW 目标文件已存在，按策略跳过',
+                  targetPath: rawTargetPath,
+                  isRaw: true,
+                ),
+              );
+            }
             _exportProgress = (index + 1) / selectedEntries.length;
             notifyListeners();
             continue;
@@ -1058,11 +1179,6 @@ class LocalPickerProvider with ChangeNotifier {
           itemRenamed = resolved.wasRenamed;
 
           if (options.includeRaw && entry.rawPath != null) {
-            final rawTargetPath = resolved.rawFileName == null
-                ? (desiredRawFileName == null
-                      ? null
-                      : p.join(options.targetDirectory, desiredRawFileName))
-                : p.join(options.targetDirectory, resolved.rawFileName!);
             if (resolved.rawSkipped || resolved.rawFileName == null) {
               skippedCount++;
               issues.add(
@@ -1151,14 +1267,18 @@ class LocalPickerProvider with ChangeNotifier {
             options.includeRaw &&
             desiredRawFileName != null &&
             existingFileNames.contains(desiredRawFileName);
+        final skipPair = options.includeRaw && desiredRawFileName != null
+            ? imageExists || rawExists
+            : imageExists;
         return _ResolvedExportName(
-          imageFileName: imageExists ? null : desiredImageFileName,
-          rawFileName: rawExists || !options.includeRaw
+          imageFileName: skipPair ? null : desiredImageFileName,
+          rawFileName: skipPair || !options.includeRaw
               ? null
               : desiredRawFileName,
           wasRenamed: false,
-          imageSkipped: imageExists,
-          rawSkipped: rawExists,
+          imageSkipped: skipPair,
+          rawSkipped:
+              skipPair && options.includeRaw && desiredRawFileName != null,
         );
       case ConflictAction.rename:
         final imageBase = p.basenameWithoutExtension(desiredImageFileName);
@@ -1197,11 +1317,22 @@ class LocalPickerProvider with ChangeNotifier {
     required String targetPath,
     required ConflictAction action,
   }) async {
+    if (_isSamePath(sourcePath, targetPath)) {
+      throw StateError('源文件与目标路径相同，已阻止覆盖原文件');
+    }
     final targetFile = File(targetPath);
     if (action == ConflictAction.overwrite && await targetFile.exists()) {
       await targetFile.delete();
     }
     await File(sourcePath).copy(targetPath);
+  }
+
+  bool _isSamePath(String firstPath, String secondPath) {
+    final first = p.normalize(firstPath);
+    final second = p.normalize(secondPath);
+    return Platform.isWindows
+        ? first.toLowerCase() == second.toLowerCase()
+        : first == second;
   }
 
   Future<List<LocalImageEntry>> _scanDirectory(
@@ -1352,6 +1483,3 @@ class LocalPickerProvider with ChangeNotifier {
     notifyListeners();
   }
 }
-
-
-

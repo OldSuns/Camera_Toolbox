@@ -27,7 +27,7 @@ class QuickSplitService {
   bool get isCancelled => _isCancelled;
 
   /// 处理文件匹配和拷贝
-  Future<void> processFiles({
+  Future<QuickSplitResult> processFiles({
     required String imageDirectory,
     required String rawDirectory,
     required String outputDirectory,
@@ -67,6 +67,9 @@ class QuickSplitService {
 
     // 处理文件拷贝
     int processed = 0;
+    int copiedCount = 0;
+    int skippedCount = 0;
+    int renamedCount = 0;
 
     for (final match in matches) {
       if (_isCancelled) {
@@ -92,6 +95,17 @@ class QuickSplitService {
       );
 
       if (finalDestPath.isNotEmpty) {
+        if (_isSamePath(match.rawPath, finalDestPath)) {
+          skippedCount++;
+          processed++;
+          onProgress(processed, matches.length);
+          continue;
+        }
+
+        if (path.basename(finalDestPath) != fileName) {
+          renamedCount++;
+        }
+
         // 如果是覆盖操作，先删除已存在的文件
         if (conflictAction == ConflictAction.overwrite &&
             await File(finalDestPath).exists()) {
@@ -112,11 +126,14 @@ class QuickSplitService {
         ) {
           // 这里可以添加单个文件的进度
         });
+        copiedCount++;
         // 如果是重命名，需要将新文件名添加到集合中
         if (conflictAction == ConflictAction.rename &&
             !existingFiles.contains(path.basename(finalDestPath))) {
           existingFiles.add(path.basename(finalDestPath));
         }
+      } else {
+        skippedCount++;
       }
 
       processed++;
@@ -126,6 +143,13 @@ class QuickSplitService {
     if (_isCancelled) {
       throw QuickSplitCancelledException();
     }
+
+    return QuickSplitResult(
+      matchedCount: matches.length,
+      copiedCount: copiedCount,
+      skippedCount: skippedCount,
+      renamedCount: renamedCount,
+    );
   }
 
   /// 取消处理
@@ -178,7 +202,19 @@ class QuickSplitService {
             final rawName = path
                 .basenameWithoutExtension(entity.path)
                 .toLowerCase();
-            rawFileMap[rawName] = entity.path;
+            final currentPath = rawFileMap[rawName];
+            if (currentPath == null) {
+              rawFileMap[rawName] = entity.path;
+              continue;
+            }
+
+            final currentPriority = _rawPriorityForExtension(
+              path.extension(currentPath).toLowerCase(),
+            );
+            final nextPriority = _rawPriorityForExtension(extension);
+            if (nextPriority < currentPriority) {
+              rawFileMap[rawName] = entity.path;
+            }
           }
         }
       }
@@ -323,6 +359,19 @@ class QuickSplitService {
       throw FileCopyException(sourcePath, destPath, '未知错误: $e');
     }
   }
+
+  bool _isSamePath(String firstPath, String secondPath) {
+    final normalizedFirst = path.normalize(firstPath);
+    final normalizedSecond = path.normalize(secondPath);
+    return Platform.isWindows
+        ? normalizedFirst.toLowerCase() == normalizedSecond.toLowerCase()
+        : normalizedFirst == normalizedSecond;
+  }
+
+  int _rawPriorityForExtension(String extension) {
+    final index = supportedRawFormats.indexOf(extension);
+    return index == -1 ? supportedRawFormats.length : index;
+  }
 }
 
 /// 文件匹配结果
@@ -331,4 +380,18 @@ class RawMatch {
   final String rawPath;
 
   RawMatch({required this.imagePath, required this.rawPath});
+}
+
+class QuickSplitResult {
+  final int matchedCount;
+  final int copiedCount;
+  final int skippedCount;
+  final int renamedCount;
+
+  const QuickSplitResult({
+    required this.matchedCount,
+    required this.copiedCount,
+    required this.skippedCount,
+    required this.renamedCount,
+  });
 }

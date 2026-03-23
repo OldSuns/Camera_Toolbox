@@ -12,6 +12,7 @@ import 'package:provider/provider.dart';
 import '../../shared/utils/conflict_action.dart';
 import '../../shared/widgets/feature_page_layout.dart';
 import '../../shared/widgets/responsive_layout.dart';
+import '../../shared/widgets/semantic_summary_region.dart';
 import 'local_picker_provider.dart';
 
 const double _localPickerCompactBreakpoint = 760;
@@ -196,28 +197,33 @@ class _LocalPickerViewState extends State<_LocalPickerView> {
     if (viewModel.filteredImageCount == 0) {
       return const Center(child: Text('当前范围或筛选条件下没有匹配图片'));
     }
-    return RepaintBoundary(
-      child: GridView.builder(
-        controller: _scrollController,
-        padding: const EdgeInsets.all(8),
-        gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-          maxCrossAxisExtent: viewModel.thumbnailSize,
-          mainAxisSpacing: 8,
-          crossAxisSpacing: 8,
-        ),
-        itemCount:
-            viewModel.visibleEntries.length + (viewModel.hasMore ? 1 : 0),
-        itemBuilder: (context, index) {
-          if (index >= viewModel.visibleEntries.length) {
-            return const Center(child: CircularProgressIndicator());
-          }
+    return SemanticSummaryRegion(
+      label:
+          '本地选片网格，共 ${viewModel.filteredImageCount} 张图片，当前显示 ${viewModel.visibleEntries.length} 张',
+      child: RepaintBoundary(
+        child: GridView.builder(
+          controller: _scrollController,
+          padding: const EdgeInsets.all(8),
+          gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: viewModel.thumbnailSize,
+            mainAxisSpacing: 8,
+            crossAxisSpacing: 8,
+          ),
+          itemCount:
+              viewModel.visibleEntries.length + (viewModel.hasMore ? 1 : 0),
+          itemBuilder: (context, index) {
+            if (index >= viewModel.visibleEntries.length) {
+              return const Center(child: CircularProgressIndicator());
+            }
 
-          final entry = viewModel.visibleEntries[index];
-          return _LocalPickerGridTile(
-            entry: entry,
-            onTap: () => _openImageViewer(context, entry),
-          );
-        },
+            final entry = viewModel.visibleEntries[index];
+            return _LocalPickerGridTile(
+              entry: entry,
+              thumbnailSize: viewModel.thumbnailSize,
+              onTap: () => _openImageViewer(context, entry),
+            );
+          },
+        ),
       ),
     );
   }
@@ -636,19 +642,22 @@ class _LocalPickerViewState extends State<_LocalPickerView> {
                     const SizedBox(height: 8),
                     SizedBox(
                       height: 180,
-                      child: ListView.builder(
-                        itemCount: result.issues.length,
-                        itemBuilder: (context, index) {
-                          final issue = result.issues[index];
-                          final fileName = p.basename(issue.sourcePath);
-                          final suffix = issue.targetPath == null
-                              ? ''
-                              : '\n目标: ${issue.targetPath}';
-                          return Padding(
-                            padding: const EdgeInsets.only(bottom: 8),
-                            child: Text('$fileName: ${issue.message}$suffix'),
-                          );
-                        },
+                      child: SemanticSummaryRegion(
+                        label: '导出处理详情列表，共 ${result.issues.length} 条',
+                        child: ListView.builder(
+                          itemCount: result.issues.length,
+                          itemBuilder: (context, index) {
+                            final issue = result.issues[index];
+                            final fileName = p.basename(issue.sourcePath);
+                            final suffix = issue.targetPath == null
+                                ? ''
+                                : '\n目标: ${issue.targetPath}';
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: Text('$fileName: ${issue.message}$suffix'),
+                            );
+                          },
+                        ),
                       ),
                     ),
                   ],
@@ -932,25 +941,30 @@ class _ImageViewerDialogState extends State<ImageViewerDialog> {
         child: Stack(
           alignment: Alignment.center,
           children: [
-            PageView.builder(
-              controller: _pageController,
-              itemCount: itemCount,
-              onPageChanged: (index) {
-                provider.setCurrentImageIndex(index);
-                provider.preloadAdjacentImages(context);
-              },
-              itemBuilder: (context, index) {
-                final entry = provider.filteredImageEntries[index];
-                return RepaintBoundary(
-                  child: InteractiveViewer(
-                    panEnabled: true,
-                    boundaryMargin: const EdgeInsets.all(20),
-                    minScale: 0.5,
-                    maxScale: 3,
-                    child: _buildImage(provider, entry.path),
-                  ),
-                );
-              },
+            SemanticSummaryRegion(
+              label:
+                  '大图查看器，共 $itemCount 张图片，当前第 ${provider.currentImageIndex + 1} 张',
+              child: PageView.builder(
+                controller: _pageController,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: itemCount,
+                onPageChanged: (index) {
+                  provider.setCurrentImageIndex(index);
+                  provider.preloadAdjacentImages(context);
+                },
+                itemBuilder: (context, index) {
+                  final entry = provider.filteredImageEntries[index];
+                  return RepaintBoundary(
+                    child: InteractiveViewer(
+                      panEnabled: true,
+                      boundaryMargin: const EdgeInsets.all(20),
+                      minScale: 0.5,
+                      maxScale: 3,
+                      child: _buildImage(provider, entry.path),
+                    ),
+                  );
+                },
+              ),
             ),
             Positioned(
               top: 10,
@@ -1515,9 +1529,14 @@ class LocalPickerViewerMetadataPanel extends StatelessWidget {
 }
 
 class ThumbnailView extends StatefulWidget {
-  const ThumbnailView({super.key, required this.imagePath});
+  const ThumbnailView({
+    super.key,
+    required this.imagePath,
+    required this.thumbnailSize,
+  });
 
   final String imagePath;
+  final double thumbnailSize;
 
   @override
   State<ThumbnailView> createState() => _ThumbnailViewState();
@@ -1525,31 +1544,50 @@ class ThumbnailView extends StatefulWidget {
 
 class _ThumbnailViewState extends State<ThumbnailView> {
   Future<Uint8List?>? _thumbnailFuture;
+  String? _requestKey;
 
   @override
   void initState() {
     super.initState();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
     _loadThumbnail();
   }
 
   @override
   void didUpdateWidget(covariant ThumbnailView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.imagePath != widget.imagePath) {
+    if (oldWidget.imagePath != widget.imagePath ||
+        oldWidget.thumbnailSize != widget.thumbnailSize) {
       _loadThumbnail();
     }
   }
 
   void _loadThumbnail() {
-    _thumbnailFuture = context.read<LocalPickerProvider>().getThumbnail(
+    final provider = context.read<LocalPickerProvider>();
+    final devicePixelRatio = MediaQuery.of(context).devicePixelRatio;
+    final targetDimension = provider.normalizeThumbnailDimension(
+      (widget.thumbnailSize * devicePixelRatio).round(),
+    );
+    _requestKey = provider.thumbnailRequestKey(
       widget.imagePath,
+      targetDimension,
+    );
+    _thumbnailFuture = provider.getThumbnail(
+      widget.imagePath,
+      targetDimension: targetDimension,
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final requestKey = _requestKey;
     final cachedThumbnail = context.select<LocalPickerProvider, Uint8List?>(
-      (provider) => provider.thumbnailCache[widget.imagePath],
+      (provider) =>
+          requestKey == null ? null : provider.thumbnailCache[requestKey],
     );
 
     if (cachedThumbnail != null) {
@@ -1557,6 +1595,7 @@ class _ThumbnailViewState extends State<ThumbnailView> {
         cachedThumbnail,
         fit: BoxFit.cover,
         gaplessPlayback: true,
+        filterQuality: FilterQuality.medium,
       );
     }
 
@@ -1571,6 +1610,7 @@ class _ThumbnailViewState extends State<ThumbnailView> {
             snapshot.data!,
             fit: BoxFit.cover,
             gaplessPlayback: true,
+            filterQuality: FilterQuality.medium,
           );
         }
         return Container(
@@ -1614,9 +1654,14 @@ class _LocalPickerExportProgress extends StatelessWidget {
 }
 
 class _LocalPickerGridTile extends StatelessWidget {
-  const _LocalPickerGridTile({required this.entry, required this.onTap});
+  const _LocalPickerGridTile({
+    required this.entry,
+    required this.thumbnailSize,
+    required this.onTap,
+  });
 
   final LocalImageEntry entry;
+  final double thumbnailSize;
   final VoidCallback onTap;
 
   @override
@@ -1631,7 +1676,10 @@ class _LocalPickerGridTile extends StatelessWidget {
             child: _LocalPickerSelectionCheckbox(imagePath: entry.path),
           ),
           footer: LocalPickerGridMetadataFooter(entry: entry),
-          child: ThumbnailView(imagePath: entry.path),
+          child: ThumbnailView(
+            imagePath: entry.path,
+            thumbnailSize: thumbnailSize,
+          ),
         ),
       ),
     );

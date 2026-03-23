@@ -35,8 +35,7 @@ class ExifData {
 
   /// 检查是否有GPS信息
   bool get hasGpsInfo {
-    return rawData.containsKey('GPS GPSLatitude') &&
-        rawData.containsKey('GPS GPSLongitude');
+    return translatedData.containsKey('纬度') && translatedData.containsKey('经度');
   }
 
   /// 获取GPS坐标
@@ -44,11 +43,24 @@ class ExifData {
     if (!hasGpsInfo) return null;
 
     try {
-      // 这里需要解析GPS坐标格式
-      return null; // 暂时返回null，后续实现
+      final latitude = _parseCoordinate(translatedData['纬度']);
+      final longitude = _parseCoordinate(translatedData['经度']);
+      if (latitude == null || longitude == null) {
+        return null;
+      }
+      return {'latitude': latitude, 'longitude': longitude};
     } catch (e) {
       return null;
     }
+  }
+
+  double? _parseCoordinate(String? value) {
+    if (value == null || value.isEmpty) {
+      return null;
+    }
+
+    final normalized = value.replaceAll('°', '').trim();
+    return double.tryParse(normalized);
   }
 
   /// 创建空EXIF数据

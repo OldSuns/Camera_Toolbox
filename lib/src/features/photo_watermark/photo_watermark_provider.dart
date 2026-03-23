@@ -105,7 +105,7 @@ enum ProcessingStatus { idle, processing, completed, error }
 /// 批处理任务
 class BatchProcessTask {
   final File file;
-  final String? outputPath;
+  String? outputPath;
   ProcessingStatus status;
   String? errorMessage;
   double progress;
@@ -162,13 +162,23 @@ class PhotoWatermarkProvider extends ChangeNotifier {
   final List<BatchProcessTask> _batchTasks = [];
   List<BatchProcessTask> get batchTasks => _batchTasks;
 
-  // 处理状态
-  ProcessingStatus _status = ProcessingStatus.idle;
-  ProcessingStatus get status => _status;
+  ProcessingStatus _previewStatus = ProcessingStatus.idle;
+  ProcessingStatus get previewStatus => _previewStatus;
 
-  // 错误信息
-  String? _errorMessage;
-  String? get errorMessage => _errorMessage;
+  String? _previewErrorMessage;
+  String? get previewErrorMessage => _previewErrorMessage;
+
+  ProcessingStatus _saveStatus = ProcessingStatus.idle;
+  ProcessingStatus get saveStatus => _saveStatus;
+
+  String? _saveErrorMessage;
+  String? get saveErrorMessage => _saveErrorMessage;
+
+  ProcessingStatus _batchStatus = ProcessingStatus.idle;
+  ProcessingStatus get batchStatus => _batchStatus;
+
+  String? _batchErrorMessage;
+  String? get batchErrorMessage => _batchErrorMessage;
 
   // 总体进度
   double _overallProgress = 0.0;
@@ -178,12 +188,19 @@ class PhotoWatermarkProvider extends ChangeNotifier {
   Directory? _outputDirectory;
   Directory? get outputDirectory => _outputDirectory;
 
-  // 是否正在处理
-  bool get isProcessing => _status == ProcessingStatus.processing;
+  bool get isPreviewBusy => _previewStatus == ProcessingStatus.processing;
+  bool get isSavingCurrentImage => _saveStatus == ProcessingStatus.processing;
+  bool get isBatchProcessing => _batchStatus == ProcessingStatus.processing;
+  bool get hasSavedCurrentImage => _saveStatus == ProcessingStatus.completed;
+  bool get isProcessing =>
+      isPreviewBusy || isSavingCurrentImage || isBatchProcessing;
 
   // 已完成数量
   int get completedCount =>
       _batchTasks.where((t) => t.status == ProcessingStatus.completed).length;
+
+  int get failedCount =>
+      _batchTasks.where((t) => t.status == ProcessingStatus.error).length;
 
   // 总任务数
   int get totalCount => _batchTasks.length;
@@ -204,6 +221,10 @@ class PhotoWatermarkProvider extends ChangeNotifier {
   final Set<String> _pendingTasks = {}; // Tracks input file paths
   int _currentIsolateIndex = 0;
   bool _isolatesInitialized = false;
+
+  bool get _usesGalleryOutput => Platform.isAndroid || Platform.isIOS;
+  bool get _usesDirectoryOutput =>
+      Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
   /// 更新配置
   void updateConfig(WatermarkConfig newConfig) {
@@ -301,8 +322,10 @@ class PhotoWatermarkProvider extends ChangeNotifier {
   /// 加载单个图像
   Future<void> loadImage(File file) async {
     try {
-      _status = ProcessingStatus.processing;
-      _errorMessage = null;
+      _previewStatus = ProcessingStatus.processing;
+      _previewErrorMessage = null;
+      _saveStatus = ProcessingStatus.idle;
+      _saveErrorMessage = null;
       notifyListeners();
 
       // 释放之前的资源
@@ -329,11 +352,11 @@ class PhotoWatermarkProvider extends ChangeNotifier {
       await _generatePreview();
       _needsPreviewGeneration = false;
 
-      _status = ProcessingStatus.idle;
+      _previewStatus = ProcessingStatus.idle;
       notifyListeners();
     } catch (e) {
-      _status = ProcessingStatus.error;
-      _errorMessage = '加载图像失败: $e';
+      _previewStatus = ProcessingStatus.error;
+      _previewErrorMessage = '加载图像失败: $e';
       notifyListeners();
     }
   }
@@ -346,8 +369,8 @@ class PhotoWatermarkProvider extends ChangeNotifier {
       await _generatePreviewInMainThread();
     } catch (e) {
       debugPrint('生成预览失败: $e');
-      _status = ProcessingStatus.error;
-      _errorMessage = '生成预览失败: $e';
+      _previewStatus = ProcessingStatus.error;
+      _previewErrorMessage = '生成预览失败: $e';
       notifyListeners();
     }
   }
@@ -357,18 +380,18 @@ class PhotoWatermarkProvider extends ChangeNotifier {
     if (_currentImage == null) return;
 
     try {
-      _status = ProcessingStatus.processing;
+      _previewStatus = ProcessingStatus.processing;
       _needsPreviewGeneration = false;
-      _errorMessage = null;
+      _previewErrorMessage = null;
       notifyListeners();
 
       await _generatePreviewInMainThread();
 
-      _status = ProcessingStatus.idle;
+      _previewStatus = ProcessingStatus.idle;
       notifyListeners();
     } catch (e) {
-      _status = ProcessingStatus.error;
-      _errorMessage = '生成预览失败: $e';
+      _previewStatus = ProcessingStatus.error;
+      _previewErrorMessage = '生成预览失败: $e';
       notifyListeners();
     }
   }
@@ -398,14 +421,15 @@ class PhotoWatermarkProvider extends ChangeNotifier {
         Future.microtask(() => oldPreviewImage.dispose());
       }
 
-      _status = ProcessingStatus.idle;
+      _previewStatus = ProcessingStatus.idle;
       _needsPreviewGeneration = false;
+      _previewErrorMessage = null;
       debugPrint('主线程: 预览图像更新完成');
       notifyListeners();
     } catch (e) {
       debugPrint('主线程: 预览生成失败: $e');
-      _status = ProcessingStatus.error;
-      _errorMessage = '生成预览失败: $e';
+      _previewStatus = ProcessingStatus.error;
+      _previewErrorMessage = '生成预览失败: $e';
       notifyListeners();
     }
   }
@@ -414,7 +438,7 @@ class PhotoWatermarkProvider extends ChangeNotifier {
   Future<bool> _requestStoragePermission() async {
     PermissionStatus status;
 
-    if (Platform.isIOS || Platform.isMacOS) {
+    if (Platform.isIOS) {
       status = await Permission.photos.request();
     } else if (Platform.isAndroid) {
       final deviceInfo = await DeviceInfoPlugin().androidInfo;
@@ -442,14 +466,21 @@ class PhotoWatermarkProvider extends ChangeNotifier {
   }
 
   /// Saves the given JPG bytes to the appropriate location based on the platform.
-  Future<void> _saveJpgBytes(Uint8List jpgBytes, String fileName) async {
-    if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) {
+  Future<String> _saveJpgBytes(
+    Uint8List jpgBytes,
+    String fileName, {
+    String? preferredOutputPath,
+  }) async {
+    if (_usesGalleryOutput) {
       await Gal.putImageBytes(jpgBytes, name: fileName);
+      return fileName;
     } else {
-      // Desktop logic
       await _ensureOutputDirectory();
-      final outputPath = path.join(_outputDirectory!.path, fileName);
+      final preferredPath =
+          preferredOutputPath ?? path.join(_outputDirectory!.path, fileName);
+      final outputPath = await _resolveUniqueOutputPath(preferredPath);
       await File(outputPath).writeAsBytes(jpgBytes);
+      return outputPath;
     }
   }
 
@@ -457,7 +488,8 @@ class PhotoWatermarkProvider extends ChangeNotifier {
     if (_currentImage == null || _previewImage == null) return;
 
     try {
-      _status = ProcessingStatus.processing;
+      _saveStatus = ProcessingStatus.processing;
+      _saveErrorMessage = null;
       notifyListeners();
 
       final hasPermission = await _requestStoragePermission();
@@ -475,11 +507,11 @@ class PhotoWatermarkProvider extends ChangeNotifier {
           '${path.basenameWithoutExtension(_currentImage!.sourceFile.path)}_watermark_$timestamp.jpg';
 
       await _saveJpgBytes(jpgBytes, fileName);
-      _status = ProcessingStatus.completed;
+      _saveStatus = ProcessingStatus.completed;
       notifyListeners();
     } catch (e) {
-      _status = ProcessingStatus.error;
-      _errorMessage = '保存图像失败: $e';
+      _saveStatus = ProcessingStatus.error;
+      _saveErrorMessage = '保存图像失败: $e';
       notifyListeners();
     }
   }
@@ -487,7 +519,7 @@ class PhotoWatermarkProvider extends ChangeNotifier {
   /// 添加批处理文件
   Future<void> addBatchFiles(List<File> files) async {
     debugPrint('addBatchFiles 被调用，文件数量: ${files.length}');
-    final isDesktop = Platform.isWindows || Platform.isLinux;
+    final isDesktop = _usesDirectoryOutput;
 
     // 仅在桌面端需要预设输出目录
     if (isDesktop) {
@@ -539,33 +571,38 @@ class PhotoWatermarkProvider extends ChangeNotifier {
 
   /// 清空批处理任务
   void clearBatchTasks() {
+    if (isBatchProcessing) {
+      cancelBatchProcessing();
+    }
     _batchTasks.clear();
     _overallProgress = 0.0;
+    _batchStatus = ProcessingStatus.idle;
+    _batchErrorMessage = null;
     notifyListeners();
   }
 
   /// 开始批处理 - 使用定时器分批处理避免阻塞UI
   /// 开始批处理 - 使用多Isolate并行处理
   Future<void> startBatchProcessing() async {
-    if (_batchTasks.isEmpty || isProcessing) return;
+    if (_batchTasks.isEmpty || isBatchProcessing) return;
 
-    _status = ProcessingStatus.processing;
-    _errorMessage = null;
+    _batchStatus = ProcessingStatus.processing;
+    _batchErrorMessage = null;
     _overallProgress = 0.0;
     _batchProcessingCancelled = false;
     notifyListeners();
 
     final hasPermission = await _requestStoragePermission();
     if (!hasPermission) {
-      _status = ProcessingStatus.error;
-      _errorMessage = '存储权限被拒绝，无法开始批处理';
+      _batchStatus = ProcessingStatus.error;
+      _batchErrorMessage = '存储权限被拒绝，无法开始批处理';
       notifyListeners();
       return;
     }
 
     // 仅在桌面端需要预设输出目录
     // Desktop platforms that use file paths need an output directory.
-    if (Platform.isWindows || Platform.isLinux) {
+    if (_usesDirectoryOutput) {
       await _ensureOutputDirectory();
     }
     await _initializeIsolates();
@@ -599,6 +636,9 @@ class PhotoWatermarkProvider extends ChangeNotifier {
       final task = _batchTasks[i];
 
       try {
+        task.status = ProcessingStatus.processing;
+        task.progress = 0.1;
+        notifyListeners();
         debugPrint('预处理图像 ${i + 1}/${_batchTasks.length}: ${task.file.path}');
 
         // 在主线程中加载图像并生成水印
@@ -632,6 +672,8 @@ class PhotoWatermarkProvider extends ChangeNotifier {
         // 清理资源
         container.dispose();
         processedImage.dispose();
+        task.status = ProcessingStatus.idle;
+        task.progress = 0.0;
 
         debugPrint('预处理完成: ${task.file.path}');
       } catch (e) {
@@ -643,6 +685,7 @@ class PhotoWatermarkProvider extends ChangeNotifier {
 
       // 更新进度
       notifyListeners();
+      await Future<void>.delayed(Duration.zero);
     }
 
     debugPrint('批量图像预处理完成，队列中有 ${_requestQueue.length} 个任务');
@@ -650,7 +693,7 @@ class PhotoWatermarkProvider extends ChangeNotifier {
 
   /// 处理下一个请求
   void _processNextRequest() {
-    if (_status != ProcessingStatus.processing) {
+    if (_batchStatus != ProcessingStatus.processing) {
       return;
     }
 
@@ -658,7 +701,7 @@ class PhotoWatermarkProvider extends ChangeNotifier {
       // 如果队列为空且没有待处理任务，则完成
       if (_pendingTasks.isEmpty) {
         if (!_batchProcessingCancelled) {
-          _status = ProcessingStatus.completed;
+          _batchStatus = ProcessingStatus.completed;
         }
         _disposeIsolatePool();
         notifyListeners();
@@ -698,7 +741,8 @@ class PhotoWatermarkProvider extends ChangeNotifier {
   /// 取消批处理
   void cancelBatchProcessing() {
     _batchProcessingCancelled = true;
-    _status = ProcessingStatus.idle;
+    _batchStatus = ProcessingStatus.idle;
+    _batchErrorMessage = null;
     for (final task in _batchTasks) {
       if (task.status == ProcessingStatus.processing) {
         task.status = ProcessingStatus.idle;
@@ -733,7 +777,11 @@ class PhotoWatermarkProvider extends ChangeNotifier {
       _overallProgress = 0.0;
     } else {
       final completed = _batchTasks
-          .where((t) => t.status == ProcessingStatus.completed)
+          .where(
+            (t) =>
+                t.status == ProcessingStatus.completed ||
+                t.status == ProcessingStatus.error,
+          )
           .length;
       _overallProgress = completed / _batchTasks.length;
     }
@@ -794,7 +842,7 @@ class PhotoWatermarkProvider extends ChangeNotifier {
   Future<void> openOutputDirectory() async {
     // On mobile, we can't open a directory or a specific file from gallery.
     // This function will only work on desktop.
-    if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
+    if (_usesDirectoryOutput) {
       if (_outputDirectory != null && await _outputDirectory!.exists()) {
         final directoryPath = _outputDirectory!.path;
         if (Platform.isWindows) {
@@ -894,7 +942,11 @@ class PhotoWatermarkProvider extends ChangeNotifier {
           final fileName =
               '${path.basenameWithoutExtension(task.file.path)}_watermark.jpg';
 
-          await _saveJpgBytes(result.processedBytes!, fileName);
+          task.outputPath = await _saveJpgBytes(
+            result.processedBytes!,
+            fileName,
+            preferredOutputPath: task.outputPath,
+          );
           task.status = ProcessingStatus.completed;
           task.progress = 1.0;
           debugPrint('任务完成并已保存: ${result.inputFile}');
@@ -927,6 +979,46 @@ class PhotoWatermarkProvider extends ChangeNotifier {
     _previewImage?.dispose();
 
     super.dispose();
+  }
+
+  Future<String> _resolveUniqueOutputPath(String preferredPath) async {
+    var candidatePath = preferredPath;
+    var counter = 1;
+    while (await File(candidatePath).exists()) {
+      final directory = path.dirname(preferredPath);
+      final baseName = path.basenameWithoutExtension(preferredPath);
+      final extension = path.extension(preferredPath);
+      candidatePath = path.join(directory, '${baseName}_$counter$extension');
+      counter++;
+    }
+    return candidatePath;
+  }
+
+  void releaseTransientResources({bool notify = true}) {
+    if (isBatchProcessing) {
+      return;
+    }
+
+    final oldImage = _currentImage;
+    final oldPreview = _previewImage;
+    _currentImage = null;
+    _previewImage = null;
+    _needsPreviewGeneration = false;
+    _previewStatus = ProcessingStatus.idle;
+    _previewErrorMessage = null;
+    _saveStatus = ProcessingStatus.idle;
+    _saveErrorMessage = null;
+
+    if (oldImage != null) {
+      Future.microtask(oldImage.dispose);
+    }
+    if (oldPreview != null) {
+      Future.microtask(oldPreview.dispose);
+    }
+
+    if (notify) {
+      notifyListeners();
+    }
   }
 }
 

@@ -68,6 +68,17 @@ class _ReplaceRenameViewState extends State<ReplaceRenameView> {
                               onChanged: (value) =>
                                   provider.updateFindText(index, value),
                             ),
+                            if (rule.findText.isEmpty &&
+                                rule.replaceText.isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              Text(
+                                '查找内容为空时，该规则不会生效。',
+                                style: TextStyle(
+                                  color: Theme.of(context).colorScheme.error,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
                             const SizedBox(height: 12),
                             TextFormField(
                               key: ValueKey('replace_$index'),

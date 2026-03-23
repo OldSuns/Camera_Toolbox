@@ -23,13 +23,16 @@ Future<ExifData> _parseExifDataInIsolate(String filePath) async {
     if (extension == 'cr3') {
       data = await exif_reader.readExifFromFile(file);
     } else {
-      // 优化：只读取文件的前256KB
       const int readLimit = 256 * 1024; // 256KB
       final fileBytes = await file
           .openRead(0, readLimit)
           .expand((bytes) => bytes)
           .toList();
       data = await exif_reader.readExifFromBytes(Uint8List.fromList(fileBytes));
+      if (data.isEmpty) {
+        final fullBytes = await file.readAsBytes();
+        data = await exif_reader.readExifFromBytes(fullBytes);
+      }
     }
 
     if (data.isEmpty) {

@@ -6,6 +6,7 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../shared/widgets/feature_page_layout.dart';
 import '../../shared/widgets/responsive_layout.dart';
+import '../../shared/widgets/semantic_summary_region.dart';
 import 'photo_watermark_provider.dart';
 import 'widgets/watermark_preview.dart';
 import 'widgets/watermark_settings.dart';
@@ -94,19 +95,18 @@ class _PhotoWatermarkScreenState extends State<PhotoWatermarkScreen> {
       builder: (context, isDesktop) {
         final actions = <Widget>[
           if (isDesktop &&
-              (Platform.isWindows || Platform.isMacOS || Platform.isLinux))
-            ...[
-              _PhotoWatermarkOutputDirectoryButton(
-                onPressed: _pickOutputDirectory,
-              ),
-              IconButton(
-                onPressed: () {
-                  context.read<PhotoWatermarkProvider>().openOutputDirectory();
-                },
-                icon: const Icon(Icons.launch),
-                tooltip: '打开输出目录',
-              ),
-            ],
+              (Platform.isWindows || Platform.isMacOS || Platform.isLinux)) ...[
+            _PhotoWatermarkOutputDirectoryButton(
+              onPressed: _pickOutputDirectory,
+            ),
+            IconButton(
+              onPressed: () {
+                context.read<PhotoWatermarkProvider>().openOutputDirectory();
+              },
+              icon: const Icon(Icons.launch),
+              tooltip: '打开输出目录',
+            ),
+          ],
         ];
 
         return DefaultTabController(
@@ -190,11 +190,24 @@ class _PhotoWatermarkScreenState extends State<PhotoWatermarkScreen> {
   /// 构建移动端布局
   Widget _buildMobileLayout(bool hasBatchTasks) {
     final List<Widget> children = [
-      _buildLeftPanel(isMobile: true),
-      _buildCenterPanel(),
-      if (hasBatchTasks) _buildRightPanel(isMobile: true, hasBatchTasks: true),
+      KeyedSubtree(
+        key: const ValueKey<String>('watermark_mobile_settings'),
+        child: _buildLeftPanel(isMobile: true),
+      ),
+      KeyedSubtree(
+        key: const ValueKey<String>('watermark_mobile_preview'),
+        child: _buildCenterPanel(),
+      ),
+      if (hasBatchTasks)
+        KeyedSubtree(
+          key: const ValueKey<String>('watermark_mobile_batch'),
+          child: _buildRightPanel(isMobile: true, hasBatchTasks: true),
+        ),
     ];
-    return TabBarView(children: children);
+    return TabBarView(
+      physics: const NeverScrollableScrollPhysics(),
+      children: children,
+    );
   }
 
   /// 构建左侧设置面板
@@ -226,7 +239,12 @@ class _PhotoWatermarkScreenState extends State<PhotoWatermarkScreen> {
             ],
           ),
         ),
-        const Expanded(child: WatermarkSettings()),
+        const Expanded(
+          child: SemanticSummaryRegion(
+            label: '照片水印设置区域',
+            child: WatermarkSettings(),
+          ),
+        ),
         const _PhotoWatermarkActionPanel(),
       ],
     );
@@ -253,7 +271,10 @@ class _PhotoWatermarkScreenState extends State<PhotoWatermarkScreen> {
         selector: (context, provider) => provider.currentImage != null,
         builder: (context, hasCurrentImage, _) {
           if (hasCurrentImage) {
-            return const RepaintBoundary(child: WatermarkPreview());
+            return const SemanticSummaryRegion(
+              label: '照片水印预览区域',
+              child: RepaintBoundary(child: WatermarkPreview()),
+            );
           }
           return Center(
             child: Column(
@@ -339,10 +360,15 @@ class _PhotoWatermarkScreenState extends State<PhotoWatermarkScreen> {
       return const SizedBox.shrink();
     }
 
-    final panelContent = const Column(
-      children: [
+    final panelContent = Column(
+      children: const [
         _PhotoWatermarkBatchPanelHeader(),
-        Expanded(child: BatchProcessList()),
+        Expanded(
+          child: SemanticSummaryRegion(
+            label: '照片水印批处理列表',
+            child: BatchProcessList(),
+          ),
+        ),
       ],
     );
 
@@ -400,22 +426,25 @@ class _PhotoWatermarkActionPanel extends StatelessWidget {
             bool hasCurrentImage,
             bool needsPreviewGeneration,
             bool hasPreviewImage,
-            ProcessingStatus status,
-            String? errorMessage,
+            bool isPreviewBusy,
+            bool isSaving,
+            bool saveSucceeded,
+            String? previewErrorMessage,
+            String? saveErrorMessage,
           })
         >((provider) {
           return (
             hasCurrentImage: provider.currentImage != null,
             needsPreviewGeneration: provider.needsPreviewGeneration,
             hasPreviewImage: provider.previewImage != null,
-            status: provider.status,
-            errorMessage: provider.errorMessage,
+            isPreviewBusy: provider.isPreviewBusy,
+            isSaving: provider.isSavingCurrentImage,
+            saveSucceeded: provider.hasSavedCurrentImage,
+            previewErrorMessage: provider.previewErrorMessage,
+            saveErrorMessage: provider.saveErrorMessage,
           );
         });
     final provider = context.read<PhotoWatermarkProvider>();
-    final isGenerating =
-        panelState.status == ProcessingStatus.processing &&
-        !panelState.needsPreviewGeneration;
 
     return Container(
       padding: const EdgeInsets.all(DesignTokens.spacing16),
@@ -428,10 +457,10 @@ class _PhotoWatermarkActionPanel extends StatelessWidget {
             onPressed:
                 panelState.hasCurrentImage &&
                     panelState.needsPreviewGeneration &&
-                    panelState.status != ProcessingStatus.processing
+                    !panelState.isPreviewBusy
                 ? provider.generatePreviewManually
                 : null,
-            icon: isGenerating
+            icon: panelState.isPreviewBusy
                 ? const SizedBox(
                     width: 16,
                     height: 16,
@@ -441,7 +470,7 @@ class _PhotoWatermarkActionPanel extends StatelessWidget {
                     ),
                   )
                 : const Icon(Icons.visibility),
-            label: Text(isGenerating ? '生成中...' : '生成预览'),
+            label: Text(panelState.isPreviewBusy ? '生成中...' : '生成预览'),
             style: DesignTokens.primaryButtonStyle,
           ),
           const SizedBox(height: DesignTokens.spacing12),
@@ -449,10 +478,10 @@ class _PhotoWatermarkActionPanel extends StatelessWidget {
             onPressed:
                 panelState.hasCurrentImage &&
                     panelState.hasPreviewImage &&
-                    panelState.status != ProcessingStatus.processing
+                    !panelState.isSaving
                 ? provider.saveCurrentImage
                 : null,
-            icon: panelState.status == ProcessingStatus.processing
+            icon: panelState.isSaving
                 ? const SizedBox(
                     width: 16,
                     height: 16,
@@ -462,11 +491,7 @@ class _PhotoWatermarkActionPanel extends StatelessWidget {
                     ),
                   )
                 : const Icon(Icons.save),
-            label: Text(
-              panelState.status == ProcessingStatus.processing
-                  ? '处理中...'
-                  : '保存图片',
-            ),
+            label: Text(panelState.isSaving ? '保存中...' : '保存图片'),
             style: DesignTokens.primaryButtonStyle.copyWith(
               backgroundColor: WidgetStateProperty.resolveWith((states) {
                 if (states.contains(WidgetState.disabled)) {
@@ -477,17 +502,25 @@ class _PhotoWatermarkActionPanel extends StatelessWidget {
             ),
           ),
           const SizedBox(height: DesignTokens.spacing12),
-          if (panelState.status == ProcessingStatus.error &&
-              panelState.errorMessage != null)
+          if (panelState.previewErrorMessage != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Text(
-                '错误: ${panelState.errorMessage}',
+                '错误: ${panelState.previewErrorMessage}',
                 style: const TextStyle(color: Colors.red, fontSize: 12),
                 textAlign: TextAlign.center,
               ),
             )
-          else if (panelState.status == ProcessingStatus.completed)
+          else if (panelState.saveErrorMessage != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                '错误: ${panelState.saveErrorMessage}',
+                style: const TextStyle(color: Colors.red, fontSize: 12),
+                textAlign: TextAlign.center,
+              ),
+            )
+          else if (panelState.saveSucceeded)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Text(
@@ -513,17 +546,21 @@ class _PhotoWatermarkBatchPanelHeader extends StatelessWidget {
           ({
             int taskCount,
             int completedCount,
+            int failedCount,
             int totalCount,
             double overallProgress,
-            ProcessingStatus status,
+            ProcessingStatus batchStatus,
+            String? batchErrorMessage,
           })
         >((provider) {
           return (
             taskCount: provider.batchTasks.length,
             completedCount: provider.completedCount,
+            failedCount: provider.failedCount,
             totalCount: provider.totalCount,
             overallProgress: provider.overallProgress,
-            status: provider.status,
+            batchStatus: provider.batchStatus,
+            batchErrorMessage: provider.batchErrorMessage,
           );
         });
     final provider = context.read<PhotoWatermarkProvider>();
@@ -551,12 +588,13 @@ class _PhotoWatermarkBatchPanelHeader extends StatelessWidget {
             ],
           ),
           const SizedBox(height: DesignTokens.spacing12),
-          if (headerState.status == ProcessingStatus.processing) ...[
+          if (headerState.batchStatus == ProcessingStatus.processing ||
+              headerState.batchStatus == ProcessingStatus.completed) ...[
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  '进度: ${headerState.completedCount} / ${headerState.totalCount}',
+                  '完成: ${headerState.completedCount}  失败: ${headerState.failedCount} / ${headerState.totalCount}',
                   style: DesignTokens.bodySmall,
                 ),
                 Text(
@@ -580,7 +618,11 @@ class _PhotoWatermarkBatchPanelHeader extends StatelessWidget {
                       ? provider.clearBatchTasks
                       : null,
                   icon: const Icon(Icons.clear_all, size: 20),
-                  label: const Text('清空'),
+                  label: Text(
+                    headerState.batchStatus == ProcessingStatus.processing
+                        ? '取消并清空'
+                        : '清空',
+                  ),
                   style: DesignTokens.secondaryButtonStyle.copyWith(
                     minimumSize: WidgetStateProperty.all(const Size(0, 36)),
                   ),
@@ -591,10 +633,10 @@ class _PhotoWatermarkBatchPanelHeader extends StatelessWidget {
                 child: ElevatedButton.icon(
                   onPressed:
                       headerState.taskCount > 0 &&
-                          headerState.status != ProcessingStatus.processing
+                          headerState.batchStatus != ProcessingStatus.processing
                       ? provider.startBatchProcessing
                       : null,
-                  icon: headerState.status == ProcessingStatus.processing
+                  icon: headerState.batchStatus == ProcessingStatus.processing
                       ? const SizedBox(
                           width: 16,
                           height: 16,
@@ -605,7 +647,7 @@ class _PhotoWatermarkBatchPanelHeader extends StatelessWidget {
                         )
                       : const Icon(Icons.play_arrow, size: 20),
                   label: Text(
-                    headerState.status == ProcessingStatus.processing
+                    headerState.batchStatus == ProcessingStatus.processing
                         ? '处理中'
                         : '开始',
                   ),
@@ -616,6 +658,13 @@ class _PhotoWatermarkBatchPanelHeader extends StatelessWidget {
               ),
             ],
           ),
+          if (headerState.batchErrorMessage != null) ...[
+            const SizedBox(height: DesignTokens.spacing8),
+            Text(
+              headerState.batchErrorMessage!,
+              style: DesignTokens.bodySmall.copyWith(color: Colors.red),
+            ),
+          ],
         ],
       ),
     );
@@ -624,6 +673,17 @@ class _PhotoWatermarkBatchPanelHeader extends StatelessWidget {
 
 class _PhotoWatermarkDragOverlay extends StatelessWidget {
   const _PhotoWatermarkDragOverlay();
+
+  @override
+  Widget build(BuildContext context) {
+    return const ExcludeSemantics(
+      child: SizedBox.expand(child: _PhotoWatermarkDragOverlayBody()),
+    );
+  }
+}
+
+class _PhotoWatermarkDragOverlayBody extends StatelessWidget {
+  const _PhotoWatermarkDragOverlayBody();
 
   @override
   Widget build(BuildContext context) {
