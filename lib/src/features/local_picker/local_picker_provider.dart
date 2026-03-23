@@ -432,16 +432,7 @@ class LocalPickerProvider with ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
-    for (final receivePort in _receivePorts) {
-      receivePort.close();
-    }
-    for (final isolate in _isolates) {
-      isolate?.kill(priority: Isolate.immediate);
-    }
-    _receivePorts.clear();
-    _isolates.clear();
-    _sendPorts.clear();
-    _sendPortCompleters.clear();
+    _disposeThumbnailWorkers();
     super.dispose();
   }
 
@@ -470,11 +461,7 @@ class LocalPickerProvider with ChangeNotifier {
       _entriesByPath
         ..clear()
         ..addEntries(entries.map((entry) => MapEntry(entry.path, entry)));
-      _rebuildVisibleEntries(resetVisible: true);
-      _warmVisibleThumbnails(startIndex: 0, count: _visibleCount);
-      if (_showCaptureInfo) {
-        _warmVisibleMetadata(startIndex: 0, count: _visibleCount);
-      }
+      _rebuildAndWarmVisibleEntries(resetVisible: true);
     } catch (error) {
       debugPrint('Error loading local picker directory: $error');
       _emitUserMessage('加载目录失败: $error');
@@ -526,6 +513,12 @@ class LocalPickerProvider with ChangeNotifier {
 
   void _resetThumbnailWorkers() {
     _workerGeneration++;
+    _disposeThumbnailWorkers();
+    _isolatesInitialized = false;
+    _currentIsolateIndex = 0;
+  }
+
+  void _disposeThumbnailWorkers() {
     for (final receivePort in _receivePorts) {
       receivePort.close();
     }
@@ -536,8 +529,6 @@ class LocalPickerProvider with ChangeNotifier {
     _isolates.clear();
     _sendPorts.clear();
     _sendPortCompleters.clear();
-    _isolatesInitialized = false;
-    _currentIsolateIndex = 0;
   }
 
   Future<void> setScanScope(FolderScanScope scope) async {
@@ -557,11 +548,7 @@ class LocalPickerProvider with ChangeNotifier {
       return;
     }
     _sortMode = mode;
-    _rebuildVisibleEntries(resetVisible: true);
-    _warmVisibleThumbnails(startIndex: 0, count: _visibleCount);
-    if (_showCaptureInfo) {
-      _warmVisibleMetadata(startIndex: 0, count: _visibleCount);
-    }
+    _rebuildAndWarmVisibleEntries(resetVisible: true);
     notifyListeners();
   }
 
@@ -570,11 +557,7 @@ class LocalPickerProvider with ChangeNotifier {
       return;
     }
     _filterMode = mode;
-    _rebuildVisibleEntries(resetVisible: true);
-    _warmVisibleThumbnails(startIndex: 0, count: _visibleCount);
-    if (_showCaptureInfo) {
-      _warmVisibleMetadata(startIndex: 0, count: _visibleCount);
-    }
+    _rebuildAndWarmVisibleEntries(resetVisible: true);
     notifyListeners();
   }
 
@@ -602,16 +585,10 @@ class LocalPickerProvider with ChangeNotifier {
       0,
       _filteredImageEntries.length,
     );
-    _warmVisibleThumbnails(
+    _warmVisibleRange(
       startIndex: previousVisibleCount,
       count: _visibleCount - previousVisibleCount,
     );
-    if (_showCaptureInfo) {
-      _warmVisibleMetadata(
-        startIndex: previousVisibleCount,
-        count: _visibleCount - previousVisibleCount,
-      );
-    }
     notifyListeners();
   }
 
@@ -972,6 +949,18 @@ class LocalPickerProvider with ChangeNotifier {
         _queueThumbnailGeneration(imagePath, targetDimension);
       }
     }
+  }
+
+  void _warmVisibleRange({required int startIndex, required int count}) {
+    _warmVisibleThumbnails(startIndex: startIndex, count: count);
+    if (_showCaptureInfo) {
+      _warmVisibleMetadata(startIndex: startIndex, count: count);
+    }
+  }
+
+  void _rebuildAndWarmVisibleEntries({required bool resetVisible}) {
+    _rebuildVisibleEntries(resetVisible: resetVisible);
+    _warmVisibleRange(startIndex: 0, count: _visibleCount);
   }
 
   void _scheduleThumbnailNotify() {

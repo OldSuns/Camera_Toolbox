@@ -115,41 +115,70 @@ class RenameProvider with ChangeNotifier {
 
   bool isFileAlreadyAdded(String filePath) => _isFileAlreadyAdded(filePath);
 
-  void setActiveTabIndex(int index) {
-    if (_activeTabIndex == index) {
+  void _setValueAndRefresh<T>(
+    T currentValue,
+    T nextValue,
+    void Function(T value) assign,
+  ) {
+    if (currentValue == nextValue) {
       return;
     }
-    _activeTabIndex = index;
+    assign(nextValue);
     _refreshPreviewPlan();
+  }
+
+  bool _hasReplaceRuleAt(int index) =>
+      index >= 0 && index < _replaceRules.length;
+
+  void _updateReplaceRule(
+    int index,
+    ReplaceRule Function(ReplaceRule rule) transform,
+  ) {
+    if (!_hasReplaceRuleAt(index)) {
+      return;
+    }
+    _replaceRules[index] = transform(_replaceRules[index]);
+    _refreshPreviewPlan();
+  }
+
+  void setActiveTabIndex(int index) {
+    _setValueAndRefresh(
+      _activeTabIndex,
+      index,
+      (value) => _activeTabIndex = value,
+    );
   }
 
   void setMergeSameName(bool value) {
-    if (_mergeSameName == value) {
-      return;
-    }
-    _mergeSameName = value;
-    _refreshPreviewPlan();
+    _setValueAndRefresh(
+      _mergeSameName,
+      value,
+      (nextValue) => _mergeSameName = nextValue,
+    );
   }
 
   void setExifTemplate(String template) {
-    _exifTemplate = template;
-    _refreshPreviewPlan();
+    _setValueAndRefresh(
+      _exifTemplate,
+      template,
+      (value) => _exifTemplate = value,
+    );
   }
 
   void setConflictPolicy(RenameConflictPolicy policy) {
-    if (_conflictPolicy == policy) {
-      return;
-    }
-    _conflictPolicy = policy;
-    _refreshPreviewPlan();
+    _setValueAndRefresh(
+      _conflictPolicy,
+      policy,
+      (value) => _conflictPolicy = value,
+    );
   }
 
   void setExifMissingPolicy(ExifMissingPolicy policy) {
-    if (_exifMissingPolicy == policy) {
-      return;
-    }
-    _exifMissingPolicy = policy;
-    _refreshPreviewPlan();
+    _setValueAndRefresh(
+      _exifMissingPolicy,
+      policy,
+      (value) => _exifMissingPolicy = value,
+    );
   }
 
   Future<void> loadExifData(File file, {bool notify = true}) async {
@@ -226,7 +255,7 @@ class RenameProvider with ChangeNotifier {
     if (_replaceRules.length <= 1) {
       return;
     }
-    if (index < 0 || index >= _replaceRules.length) {
+    if (!_hasReplaceRuleAt(index)) {
       return;
     }
     _replaceRules.removeAt(index);
@@ -234,83 +263,80 @@ class RenameProvider with ChangeNotifier {
   }
 
   void updateFindText(int index, String text) {
-    if (index < 0 || index >= _replaceRules.length) {
-      return;
-    }
-    _replaceRules[index] = _replaceRules[index].copyWith(findText: text);
-    _refreshPreviewPlan();
+    _updateReplaceRule(index, (rule) => rule.copyWith(findText: text));
   }
 
   void updateReplaceText(int index, String text) {
-    if (index < 0 || index >= _replaceRules.length) {
-      return;
-    }
-    _replaceRules[index] = _replaceRules[index].copyWith(replaceText: text);
-    _refreshPreviewPlan();
+    _updateReplaceRule(index, (rule) => rule.copyWith(replaceText: text));
   }
 
   void updateAllowReplaceExtension(int index, bool value) {
-    if (index < 0 || index >= _replaceRules.length) {
-      return;
-    }
-    _replaceRules[index] = _replaceRules[index].copyWith(
-      allowReplaceExtension: value,
+    _updateReplaceRule(
+      index,
+      (rule) => rule.copyWith(allowReplaceExtension: value),
     );
-    _refreshPreviewPlan();
   }
 
   void setAppendPrefix(String text) {
-    _appendPrefix = text;
-    _refreshPreviewPlan();
+    _setValueAndRefresh(_appendPrefix, text, (value) => _appendPrefix = value);
   }
 
   void setAppendSuffix(String text) {
-    _appendSuffix = text;
-    _refreshPreviewPlan();
+    _setValueAndRefresh(_appendSuffix, text, (value) => _appendSuffix = value);
   }
 
   void setAppendMode(AppendMode mode) {
-    if (_appendMode == mode) {
-      return;
-    }
-    _appendMode = mode;
-    _refreshPreviewPlan();
+    _setValueAndRefresh(_appendMode, mode, (value) => _appendMode = value);
   }
 
   void setNumberingPrefix(String text) {
-    _numberingPrefix = text;
-    _refreshPreviewPlan();
+    _setValueAndRefresh(
+      _numberingPrefix,
+      text,
+      (value) => _numberingPrefix = value,
+    );
   }
 
   void setNumberingSuffix(String text) {
-    _numberingSuffix = text;
-    _refreshPreviewPlan();
+    _setValueAndRefresh(
+      _numberingSuffix,
+      text,
+      (value) => _numberingSuffix = value,
+    );
   }
 
   void setStartNumber(int number) {
-    _startNumber = number <= 0 ? 1 : number;
-    _refreshPreviewPlan();
+    final normalized = number <= 0 ? 1 : number;
+    _setValueAndRefresh(
+      _startNumber,
+      normalized,
+      (value) => _startNumber = value,
+    );
   }
 
   void setNumberingType(NumberingType type) {
-    if (_numberingType == type) {
-      return;
-    }
-    _numberingType = type;
-    _refreshPreviewPlan();
+    _setValueAndRefresh(
+      _numberingType,
+      type,
+      (value) => _numberingType = value,
+    );
   }
 
   void setFixedDigits(int digits) {
-    _fixedDigits = digits < 0 ? 0 : digits;
-    _refreshPreviewPlan();
+    final normalized = digits < 0 ? 0 : digits;
+    _setValueAndRefresh(
+      _fixedDigits,
+      normalized,
+      (value) => _fixedDigits = value,
+    );
   }
 
   void setKeepOriginalName(bool value) {
-    if (_keepOriginalName == value) {
-      return;
-    }
-    _keepOriginalName = value;
-    _refreshPreviewPlan();
+    _setValueAndRefresh(
+      _keepOriginalName,
+      value,
+      (nextValue) => _keepOriginalName = nextValue,
+    );
   }
 
   Future<void> addFiles(List<XFile> xFiles) async {

@@ -11,25 +11,34 @@ import 'src/features/rename/rename_provider.dart';
 import 'src/features/photo_watermark/photo_watermark_provider.dart';
 import 'src/features/settings/services/cache_management_service.dart';
 
+const _desktopWindowOptions = WindowOptions(
+  size: Size(1200, 800),
+  center: true,
+  skipTaskbar: false,
+  titleBarStyle: TitleBarStyle.normal,
+);
+
+bool get _isDesktopPlatform =>
+    Platform.isWindows || Platform.isMacOS || Platform.isLinux;
+
+String? _platformFontFamily() {
+  if (Platform.isWindows) {
+    return 'Microsoft YaHei';
+  }
+  return null;
+}
+
 /// 应用程序的主入口点。
 void main() async {
   // 确保Flutter绑定已初始化，这是调用平台通道所必需的。
   WidgetsFlutterBinding.ensureInitialized();
 
   // 如果是桌面平台（Windows、macOS、Linux），则初始化窗口管理器。
-  if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
+  if (_isDesktopPlatform) {
     await windowManager.ensureInitialized();
 
-    // 设置初始窗口选项。
-    WindowOptions windowOptions = const WindowOptions(
-      size: Size(1200, 800), // 设置窗口大小
-      center: true, // 居中显示
-      skipTaskbar: false, // 在任务栏中显示
-      titleBarStyle: TitleBarStyle.normal, // 使用正常的标题栏
-    );
-
     // 等待窗口准备好后显示并获取焦点。
-    windowManager.waitUntilReadyToShow(windowOptions, () async {
+    windowManager.waitUntilReadyToShow(_desktopWindowOptions, () async {
       await windowManager.show();
       await windowManager.focus();
     });
@@ -64,23 +73,12 @@ void main() async {
 }
 
 /// 应用程序的根小部件。
-class CameraToolboxApp extends StatefulWidget {
+class CameraToolboxApp extends StatelessWidget {
   const CameraToolboxApp({super.key});
 
   @override
-  State<CameraToolboxApp> createState() => _CameraToolboxAppState();
-}
-
-class _CameraToolboxAppState extends State<CameraToolboxApp> {
-  @override
   Widget build(BuildContext context) {
-    // 根据平台确定字体系列
-    String? getFontFamily() {
-      if (Platform.isWindows) {
-        return 'Microsoft YaHei';
-      }
-      return null; // 其他平台使用系统默认字体
-    }
+    final fontFamily = _platformFontFamily();
 
     // 使用Consumer来监听ThemeProvider的变化，并根据其状态构建UI。
     return Consumer<ThemeProvider>(
@@ -91,8 +89,6 @@ class _CameraToolboxAppState extends State<CameraToolboxApp> {
             home: Scaffold(body: Center(child: CircularProgressIndicator())),
           );
         }
-
-        final fontFamily = getFontFamily();
 
         // 主题加载完成后，构建MaterialApp。
         return MaterialApp(

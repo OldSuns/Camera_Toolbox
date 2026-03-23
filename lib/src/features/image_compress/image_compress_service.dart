@@ -9,6 +9,12 @@ import 'package:simple_native_image_compress/simple_native_image_compress.dart';
 import 'package:gal/gal.dart';
 import '../../shared/services/image_picker_service.dart';
 
+const _gallerySavedMarker = 'gallery_saved';
+const _gallerySavedLabel = '已保存到相册';
+
+bool get _usesGalleryOutputPlatform =>
+    Platform.isAndroid || Platform.isIOS || Platform.isMacOS;
+
 /// 图像文件模型
 class ImageFile {
   static const Object _noChange = Object();
@@ -263,25 +269,6 @@ class ImageCompressService extends ChangeNotifier {
     }
   }
 
-  /// 🔧 销毁Isolate池 - 在压缩完成后立即清理
-  void _destroyIsolates() {
-    debugPrint('正在销毁Isolate池...');
-
-    for (int i = 0; i < _sendPorts.length; i++) {
-      final sendPort = _sendPorts[i];
-      if (sendPort != null) {
-        try {
-          sendPort.send({'action': 'shutdown'});
-        } catch (e) {
-          debugPrint('发送关闭信号失败: $e');
-        }
-      }
-    }
-
-    _killIsolatesNow();
-    debugPrint('Isolate池已销毁');
-  }
-
   // 🔧 添加dispose标志位防止新任务启动
   bool _isDisposing = false;
 
@@ -296,21 +283,33 @@ class ImageCompressService extends ChangeNotifier {
     _processingCount = 0;
     _isCompressing = false;
 
-    // 🔧 向所有Isolate发送关闭信号
-    for (int i = 0; i < _sendPorts.length; i++) {
-      final sendPort = _sendPorts[i];
-      if (sendPort != null) {
-        try {
-          sendPort.send({'action': 'shutdown'});
-        } catch (e) {
-          debugPrint('发送关闭信号失败: $e');
-        }
-      }
-    }
-
-    _killIsolatesNow();
+    _shutdownIsolatePool();
 
     super.dispose();
+  }
+
+  void _shutdownIsolatePool({bool log = false}) {
+    if (log) {
+      debugPrint('正在销毁Isolate池...');
+    }
+    _sendShutdownSignalToIsolates();
+    _killIsolatesNow();
+    if (log) {
+      debugPrint('Isolate池已销毁');
+    }
+  }
+
+  void _sendShutdownSignalToIsolates() {
+    for (final sendPort in _sendPorts) {
+      if (sendPort == null) {
+        continue;
+      }
+      try {
+        sendPort.send({'action': 'shutdown'});
+      } catch (e) {
+        debugPrint('发送关闭信号失败: $e');
+      }
+    }
   }
 
   void _killIsolatesNow() {
@@ -343,79 +342,96 @@ class ImageCompressService extends ChangeNotifier {
     final imageIndex = _selectedImages.indexWhere(
       (img) => img.filePath == result.filePath,
     );
+    if (imageIndex == -1) {
+      return;
+    }
 
-    if (imageIndex != -1) {
-      if (result.success) {
-        String? finalOutputPath = result.compressedFilePath;
+    if (result.success) {
+      final finalOutputPath = await _saveCompressedImageToGalleryIfNeeded(
+        result,
+      );
+      _applySuccessfulResult(imageIndex, result, finalOutputPath);
+    } else {
+      _applyFailedResult(imageIndex, result);
+    }
 
-        // 如果是移动端且有压缩字节数据，则保存到相册
-        if ((Platform.isAndroid || Platform.isIOS || Platform.isMacOS) &&
-            result.compressedBytes != null &&
-            !result.skipped) {
-          try {
-            final fileName =
-                '${path.basenameWithoutExtension(result.fileName)}_compressed_${DateTime.now().millisecondsSinceEpoch}.jpg';
-            await Gal.putImageBytes(result.compressedBytes!, name: fileName);
-            finalOutputPath = '已保存到相册';
-            _statusMessage = '已完成并保存到相册: ${result.fileName}';
-          } catch (e) {
-            debugPrint('保存到相册失败: $e');
-            _statusMessage = '压缩完成但保存到相册失败: ${result.fileName}';
-          }
-        }
+    _finishedCount++;
+    _overallProgress = _selectedImages.isEmpty
+        ? 0.0
+        : _finishedCount / _selectedImages.length;
+    notifyListeners();
+    _completeBatchIfDone();
+  }
 
-        _selectedImages[imageIndex] = _selectedImages[imageIndex].copyWith(
-          progress: 1.0,
-          isCompressing: false,
-          isCompleted: true,
-          compressedFilePath: finalOutputPath,
-          compressedSizeInBytes: result.compressedSize,
-          status: result.skipped ? 'skipped' : 'completed',
-          errorMessage: null,
-        );
-        _successfulCount++;
-        _finishedCount++;
-
-        if (result.skipped) {
-          _statusMessage = '跳过: ${result.fileName} (无需压缩)';
-        } else if (finalOutputPath == '已保存到相册') {
-          // 状态消息已在上面设置
-        } else {
-          _statusMessage = '已完成: ${result.fileName}';
-        }
-      } else {
-        _selectedImages[imageIndex] = _selectedImages[imageIndex].copyWith(
-          progress: 0.0,
-          isCompressing: false,
-          isCompleted: false,
-          status: 'error',
-          errorMessage: result.errorMessage ?? '未知错误',
-        );
-        _failedCount++;
-        _finishedCount++;
-        _statusMessage = '压缩失败: ${result.fileName} - ${result.errorMessage}';
-      }
-
-      // 更新总体进度
-      _overallProgress = _finishedCount / _selectedImages.length;
-      notifyListeners();
-
-      // 检查是否所有任务都已完成
-      if (_finishedCount >= _selectedImages.length &&
-          _taskQueue.isEmpty &&
-          _processingCount == 0) {
-        _isCompressing = false;
-        final platform =
-            Platform.isAndroid || Platform.isIOS || Platform.isMacOS
-            ? '并已保存到相册'
-            : '';
-        _statusMessage =
-            '压缩完成：成功/跳过 $_successfulCount 张，失败 $_failedCount 张$platform';
-        // 🔧 压缩完成后立即销毁Isolate池
-        _destroyIsolates();
-        notifyListeners();
+  Future<String?> _saveCompressedImageToGalleryIfNeeded(
+    _CompressionResult result,
+  ) async {
+    var finalOutputPath = result.compressedFilePath;
+    if (_usesGalleryOutputPlatform &&
+        result.compressedBytes != null &&
+        !result.skipped) {
+      try {
+        final fileName =
+            '${path.basenameWithoutExtension(result.fileName)}_compressed_${DateTime.now().millisecondsSinceEpoch}.jpg';
+        await Gal.putImageBytes(result.compressedBytes!, name: fileName);
+        finalOutputPath = _gallerySavedLabel;
+        _statusMessage = '已完成并保存到相册: ${result.fileName}';
+      } catch (e) {
+        debugPrint('保存到相册失败: $e');
+        _statusMessage = '压缩完成但保存到相册失败: ${result.fileName}';
       }
     }
+    return finalOutputPath;
+  }
+
+  void _applySuccessfulResult(
+    int imageIndex,
+    _CompressionResult result,
+    String? finalOutputPath,
+  ) {
+    _selectedImages[imageIndex] = _selectedImages[imageIndex].copyWith(
+      progress: 1.0,
+      isCompressing: false,
+      isCompleted: true,
+      compressedFilePath: finalOutputPath,
+      compressedSizeInBytes: result.compressedSize,
+      status: result.skipped ? 'skipped' : 'completed',
+      errorMessage: null,
+    );
+    _successfulCount++;
+
+    if (result.skipped) {
+      _statusMessage = '跳过: ${result.fileName} (无需压缩)';
+    } else if (finalOutputPath != _gallerySavedLabel) {
+      _statusMessage = '已完成: ${result.fileName}';
+    }
+  }
+
+  void _applyFailedResult(int imageIndex, _CompressionResult result) {
+    _selectedImages[imageIndex] = _selectedImages[imageIndex].copyWith(
+      progress: 0.0,
+      isCompressing: false,
+      isCompleted: false,
+      status: 'error',
+      errorMessage: result.errorMessage ?? '未知错误',
+    );
+    _failedCount++;
+    _statusMessage = '压缩失败: ${result.fileName} - ${result.errorMessage}';
+  }
+
+  void _completeBatchIfDone() {
+    if (_finishedCount < _selectedImages.length ||
+        _taskQueue.isNotEmpty ||
+        _processingCount != 0) {
+      return;
+    }
+
+    _isCompressing = false;
+    final platform = _usesGalleryOutputPlatform ? '并已保存到相册' : '';
+    _statusMessage =
+        '压缩完成：成功/跳过 $_successfulCount 张，失败 $_failedCount 张$platform';
+    _shutdownIsolatePool(log: true);
+    notifyListeners();
   }
 
   /// 处理下一个任务
@@ -480,7 +496,7 @@ class ImageCompressService extends ChangeNotifier {
       List<File> selectedFiles = [];
 
       // 检查是否为移动端平台或MacOS
-      if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) {
+      if (_usesGalleryOutputPlatform) {
         // 移动端：优先从相册选择多张图片，失败则使用文件选择器
         try {
           final galleryFiles =
@@ -723,7 +739,7 @@ class ImageCompressService extends ChangeNotifier {
     }
 
     final requiresDirectory =
-        !(Platform.isAndroid || Platform.isIOS || Platform.isMacOS) &&
+        !_usesGalleryOutputPlatform &&
         !config.outputToOriginalDir &&
         (config.outputDirectory == null || config.outputDirectory!.isEmpty);
     if (requiresDirectory) {
@@ -960,9 +976,9 @@ class ImageCompressService extends ChangeNotifier {
 
       // 根据平台选择保存方式
       String outputPath;
-      if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) {
+      if (_usesGalleryOutputPlatform) {
         // 移动端：保存到相册，返回特殊标记
-        outputPath = 'gallery_saved'; // 特殊标记表示已保存到相册
+        outputPath = _gallerySavedMarker; // 特殊标记表示已保存到相册
       } else {
         // 桌面端：保存到文件系统
         if (config.outputToOriginalDir) {
@@ -993,8 +1009,7 @@ class ImageCompressService extends ChangeNotifier {
         'skipped': false,
         'outputPath': outputPath,
         'compressedSize': compressedBytes.length,
-        'compressedBytes':
-            (Platform.isAndroid || Platform.isIOS || Platform.isMacOS)
+        'compressedBytes': _usesGalleryOutputPlatform
             ? compressedBytes
             : null, // 移动端返回字节数据用于保存到相册
       };
