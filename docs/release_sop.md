@@ -96,7 +96,7 @@ Get-Content release_notes.md
 1. 提交版本号和发布说明。
 
 ```powershell
-git add pubspec.yaml release_notes.md
+git add .
 git commit -m "Release v1.3.5"
 ```
 
