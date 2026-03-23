@@ -1,6 +1,7 @@
 export 'local_picker_models.dart';
 
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
@@ -59,13 +60,17 @@ class _ThumbnailRequest {
   final int targetDimension;
   final String cachePath;
   final String requestKey;
+  final _ThumbnailRequestPriority priority;
+  final int sequence;
 
   const _ThumbnailRequest(
     this.path,
     this.targetDimension,
     this.cachePath,
-    this.requestKey,
-  );
+    this.requestKey, {
+    required this.priority,
+    required this.sequence,
+  });
 }
 
 class _ThumbnailResult {
@@ -76,11 +81,7 @@ class _ThumbnailResult {
   const _ThumbnailResult(this.requestKey, this.bytes, this.cacheKey);
 }
 
-class _BatchThumbnailRequest {
-  final List<_ThumbnailRequest> requests;
-
-  const _BatchThumbnailRequest(this.requests);
-}
+enum _ThumbnailRequestPriority { immediate, visible }
 
 class _ResolvedExportName {
   final String? imageFileName;
@@ -105,10 +106,6 @@ void _thumbnailGenerator(SendPort sendPort) {
   receivePort.listen((dynamic message) async {
     if (message is _ThumbnailRequest) {
       await _processSingleThumbnail(message, sendPort);
-    } else if (message is _BatchThumbnailRequest) {
-      for (final request in message.requests) {
-        await _processSingleThumbnail(request, sendPort);
-      }
     }
   });
 }
@@ -160,17 +157,31 @@ class LocalPickerProvider with ChangeNotifier {
     int pageSize = 100,
     Future<Directory> Function()? cacheDirectoryProvider,
     Future<ExifData> Function(String path)? exifReader,
+    Future<Uint8List> Function(File file)? thumbnailDiskReader,
+    int? isolateCountOverride,
+    int? maxConcurrentOverride,
   }) : _pageSize = pageSize,
        _cacheDirectoryProvider =
            cacheDirectoryProvider ?? getApplicationCacheDirectory,
-       _exifReader = exifReader ?? ExifService.readExifFromFile {
+       _exifReader = exifReader ?? ExifService.readExifFromFile,
+       _thumbnailDiskReader =
+           thumbnailDiskReader ?? _defaultThumbnailDiskReader,
+       _isolateCountOverride = isolateCountOverride,
+       _maxConcurrentOverride = maxConcurrentOverride {
     _initCpuBasedSettings();
     unawaited(_initCacheDir());
+  }
+
+  static Future<Uint8List> _defaultThumbnailDiskReader(File file) {
+    return file.readAsBytes();
   }
 
   final int _pageSize;
   final Future<Directory> Function() _cacheDirectoryProvider;
   final Future<ExifData> Function(String path) _exifReader;
+  final Future<Uint8List> Function(File file) _thumbnailDiskReader;
+  final int? _isolateCountOverride;
+  final int? _maxConcurrentOverride;
 
   final List<LocalImageEntry> _allImageEntries = [];
   List<LocalImageEntry> get allImageEntries =>
@@ -276,6 +287,7 @@ class LocalPickerProvider with ChangeNotifier {
   final Map<String, Uint8List> _thumbnailCache = {};
   Directory? _cacheDir;
   final Set<String> _diskCacheIndex = {};
+  final Set<String> _pendingDiskReads = {};
   int _cacheHitCount = 0;
   int _cacheMissCount = 0;
   int _diskReadCount = 0;
@@ -288,26 +300,32 @@ class LocalPickerProvider with ChangeNotifier {
   final List<Isolate?> _isolates = [];
   final List<SendPort?> _sendPorts = [];
   final List<ReceivePort> _receivePorts = [];
-  final List<Completer<SendPort>> _sendPortCompleters = [];
 
   int _processingCount = 0;
   late final int _maxConcurrent;
   late final int _isolateCount;
   final List<_ThumbnailRequest> _requestQueue = [];
+  final Queue<int> _idleIsolateIndices = Queue<int>();
   final Set<String> _pendingGeneration = {};
   final Set<String> _queuedGeneration = {};
   final Set<String> _failedThumbnailPaths = {};
-  int _currentIsolateIndex = 0;
-  final int _batchSize = 2;
+  int _nextThumbnailRequestSequence = 0;
   bool _isolatesInitialized = false;
   int _workerGeneration = 0;
-  bool _thumbnailNotifyScheduled = false;
+  Timer? _thumbnailNotifyTimer;
   bool _disposed = false;
 
   void _initCpuBasedSettings() {
     final cpuCores = Platform.numberOfProcessors;
-    _isolateCount = (cpuCores / 2).ceil().clamp(1, 6);
-    _maxConcurrent = (cpuCores - 1).ceil().clamp(1, 12);
+    final int resolvedIsolateCount =
+        _isolateCountOverride ?? (cpuCores / 2).ceil().clamp(1, 4);
+    final int resolvedMaxConcurrent =
+        (_maxConcurrentOverride ?? resolvedIsolateCount).clamp(
+          1,
+          resolvedIsolateCount,
+        );
+    _isolateCount = resolvedIsolateCount;
+    _maxConcurrent = resolvedMaxConcurrent;
   }
 
   Future<void> _initCacheDir() async {
@@ -370,10 +388,8 @@ class LocalPickerProvider with ChangeNotifier {
     final generation = _workerGeneration;
     for (var index = 0; index < _isolateCount; index++) {
       final receivePort = ReceivePort();
-      final completer = Completer<SendPort>();
 
       _receivePorts.add(receivePort);
-      _sendPortCompleters.add(completer);
       _isolates.add(null);
       _sendPorts.add(null);
 
@@ -393,9 +409,8 @@ class LocalPickerProvider with ChangeNotifier {
       receivePort.listen((dynamic message) {
         if (message is SendPort) {
           _sendPorts[index] = message;
-          if (!completer.isCompleted) {
-            completer.complete(message);
-          }
+          _enqueueIdleIsolate(index);
+          _processNextRequest();
           return;
         }
 
@@ -406,6 +421,7 @@ class LocalPickerProvider with ChangeNotifier {
         if (_processingCount > 0) {
           _processingCount--;
         }
+        _enqueueIdleIsolate(index);
         _pendingGeneration.remove(message.requestKey);
         _queuedGeneration.remove(message.requestKey);
         if (message.requestKey.isNotEmpty) {
@@ -515,20 +531,21 @@ class LocalPickerProvider with ChangeNotifier {
     _workerGeneration++;
     _disposeThumbnailWorkers();
     _isolatesInitialized = false;
-    _currentIsolateIndex = 0;
   }
 
   void _disposeThumbnailWorkers() {
+    _thumbnailNotifyTimer?.cancel();
+    _thumbnailNotifyTimer = null;
     for (final receivePort in _receivePorts) {
       receivePort.close();
     }
     for (final isolate in _isolates) {
       isolate?.kill(priority: Isolate.immediate);
     }
+    _idleIsolateIndices.clear();
     _receivePorts.clear();
     _isolates.clear();
     _sendPorts.clear();
-    _sendPortCompleters.clear();
   }
 
   Future<void> setScanScope(FolderScanScope scope) async {
@@ -633,7 +650,9 @@ class LocalPickerProvider with ChangeNotifier {
   void updateThumbnailSize(double size) {
     final previousDimension = _preferredVisibleThumbnailDimension();
     _thumbnailSize = size;
-    if (_preferredVisibleThumbnailDimension() > previousDimension) {
+    final currentDimension = _preferredVisibleThumbnailDimension();
+    if (currentDimension != previousDimension) {
+      _pruneQueuedThumbnailRequests(targetDimension: currentDimension);
       _warmVisibleThumbnails(startIndex: 0, count: _visibleCount);
     }
     notifyListeners();
@@ -673,11 +692,15 @@ class LocalPickerProvider with ChangeNotifier {
   }
 
   Future<void> clearMemoryCache({bool notify = true}) async {
+    _thumbnailNotifyTimer?.cancel();
+    _thumbnailNotifyTimer = null;
     _thumbnailCache.clear();
     _requestQueue.clear();
+    _pendingDiskReads.clear();
     _pendingGeneration.clear();
     _queuedGeneration.clear();
     _failedThumbnailPaths.clear();
+    _nextThumbnailRequestSequence = 0;
     _processingCount = 0;
 
     final providers = _imageProviderCache.values.toList(growable: false);
@@ -807,8 +830,19 @@ class LocalPickerProvider with ChangeNotifier {
       return _thumbnailCache[requestKey];
     }
 
+    if (_pendingDiskReads.contains(requestKey)) {
+      return null;
+    }
+
+    if (_queuedGeneration.contains(requestKey)) {
+      _promoteQueuedThumbnailRequest(
+        requestKey,
+        priority: _ThumbnailRequestPriority.immediate,
+      );
+      return null;
+    }
+
     if (_pendingGeneration.contains(requestKey) ||
-        _queuedGeneration.contains(requestKey) ||
         _failedThumbnailPaths.contains(requestKey)) {
       return null;
     }
@@ -820,36 +854,67 @@ class LocalPickerProvider with ChangeNotifier {
     final cacheKey = _getCacheKeyForPath(imagePath, normalizedDimension);
     if (!_diskCacheIndex.contains(cacheKey)) {
       _cacheMissCount++;
-      _queueThumbnailGeneration(imagePath, normalizedDimension);
+      _queueThumbnailGeneration(
+        imagePath,
+        normalizedDimension,
+        priority: _ThumbnailRequestPriority.immediate,
+      );
       return null;
     }
 
-    unawaited(_loadFromDiskCache(imagePath, normalizedDimension));
+    unawaited(
+      _loadFromDiskCache(
+        imagePath,
+        normalizedDimension,
+        priority: _ThumbnailRequestPriority.immediate,
+      ),
+    );
     return null;
   }
 
-  Future<void> _loadFromDiskCache(String imagePath, int targetDimension) async {
+  Future<void> _loadFromDiskCache(
+    String imagePath,
+    int targetDimension, {
+    required _ThumbnailRequestPriority priority,
+  }) async {
     final requestKey = _getThumbnailRequestKey(imagePath, targetDimension);
+    if (_thumbnailCache.containsKey(requestKey) ||
+        _pendingDiskReads.contains(requestKey)) {
+      return;
+    }
+
     final cacheFile = _getCacheFileForPath(imagePath, targetDimension);
+    _pendingDiskReads.add(requestKey);
     _diskReadCount++;
     try {
       if (!await cacheFile.exists()) {
         _diskCacheIndex.remove(_getCacheKeyForPath(imagePath, targetDimension));
         _cacheMissCount++;
+        _queueThumbnailGeneration(
+          imagePath,
+          targetDimension,
+          priority: priority,
+        );
         return;
       }
 
-      final bytes = await cacheFile.readAsBytes();
+      final bytes = await _thumbnailDiskReader(cacheFile);
       if (bytes.isEmpty) {
         _diskCacheIndex.remove(_getCacheKeyForPath(imagePath, targetDimension));
         try {
           await cacheFile.delete();
         } catch (_) {}
         _cacheMissCount++;
+        _queueThumbnailGeneration(
+          imagePath,
+          targetDimension,
+          priority: priority,
+        );
         return;
       }
 
       _thumbnailCache[requestKey] = bytes;
+      _failedThumbnailPaths.remove(requestKey);
       _cacheHitCount++;
       _scheduleThumbnailNotify();
     } catch (error) {
@@ -861,10 +926,17 @@ class LocalPickerProvider with ChangeNotifier {
         }
       } catch (_) {}
       _cacheMissCount++;
+      _queueThumbnailGeneration(imagePath, targetDimension, priority: priority);
+    } finally {
+      _pendingDiskReads.remove(requestKey);
     }
   }
 
-  void _queueThumbnailGeneration(String imagePath, int targetDimension) {
+  void _queueThumbnailGeneration(
+    String imagePath,
+    int targetDimension, {
+    _ThumbnailRequestPriority priority = _ThumbnailRequestPriority.visible,
+  }) {
     final requestKey = _getThumbnailRequestKey(imagePath, targetDimension);
     if (_pendingGeneration.contains(requestKey) ||
         _queuedGeneration.contains(requestKey) ||
@@ -881,9 +953,20 @@ class LocalPickerProvider with ChangeNotifier {
       targetDimension,
       _getCacheFileForPath(imagePath, targetDimension).path,
       requestKey,
+      priority: priority,
+      sequence: _nextThumbnailRequestSequence++,
     );
     _queuedGeneration.add(requestKey);
     _requestQueue.add(request);
+    _requestQueue.sort((first, second) {
+      final priorityCompare = first.priority.index.compareTo(
+        second.priority.index,
+      );
+      if (priorityCompare != 0) {
+        return priorityCompare;
+      }
+      return first.sequence.compareTo(second.sequence);
+    });
     _processNextRequest();
   }
 
@@ -897,30 +980,31 @@ class LocalPickerProvider with ChangeNotifier {
       return;
     }
 
-    final batchRequests = <_ThumbnailRequest>[];
-    while (batchRequests.length < _batchSize &&
-        _requestQueue.isNotEmpty &&
-        _processingCount < _maxConcurrent) {
-      final request = _requestQueue.removeAt(0);
-      batchRequests.add(request);
-      _queuedGeneration.remove(request.requestKey);
-      _pendingGeneration.add(request.requestKey);
-      _processingCount++;
-    }
-
-    if (batchRequests.isEmpty) {
+    if (_idleIsolateIndices.isEmpty) {
       return;
     }
 
-    final isolateIndex = _currentIsolateIndex % _isolateCount;
-    _currentIsolateIndex++;
-    _sendPortCompleters[isolateIndex].future.then((sendPort) {
-      if (batchRequests.length == 1) {
-        sendPort.send(batchRequests.first);
-      } else {
-        sendPort.send(_BatchThumbnailRequest(batchRequests));
+    while (_requestQueue.isNotEmpty &&
+        _processingCount < _maxConcurrent &&
+        _idleIsolateIndices.isNotEmpty) {
+      final isolateIndex = _idleIsolateIndices.removeFirst();
+      final request = _requestQueue.removeAt(0);
+      _queuedGeneration.remove(request.requestKey);
+      _pendingGeneration.add(request.requestKey);
+      _processingCount++;
+      final sendPort = _sendPorts[isolateIndex];
+      if (sendPort == null) {
+        _pendingGeneration.remove(request.requestKey);
+        _queuedGeneration.add(request.requestKey);
+        _requestQueue.insert(0, request);
+        _enqueueIdleIsolate(isolateIndex);
+        if (_processingCount > 0) {
+          _processingCount--;
+        }
+        return;
       }
-    });
+      sendPort.send(request);
+    }
   }
 
   void _warmVisibleThumbnails({required int startIndex, required int count}) {
@@ -937,6 +1021,7 @@ class LocalPickerProvider with ChangeNotifier {
       final imagePath = _filteredImageEntries[index].path;
       final requestKey = _getThumbnailRequestKey(imagePath, targetDimension);
       if (_thumbnailCache.containsKey(requestKey) ||
+          _pendingDiskReads.contains(requestKey) ||
           _pendingGeneration.contains(requestKey) ||
           _queuedGeneration.contains(requestKey) ||
           _failedThumbnailPaths.contains(requestKey)) {
@@ -944,9 +1029,19 @@ class LocalPickerProvider with ChangeNotifier {
       }
       final cacheKey = _getCacheKeyForPath(imagePath, targetDimension);
       if (_diskCacheIndex.contains(cacheKey)) {
-        unawaited(_loadFromDiskCache(imagePath, targetDimension));
+        unawaited(
+          _loadFromDiskCache(
+            imagePath,
+            targetDimension,
+            priority: _ThumbnailRequestPriority.visible,
+          ),
+        );
       } else {
-        _queueThumbnailGeneration(imagePath, targetDimension);
+        _queueThumbnailGeneration(
+          imagePath,
+          targetDimension,
+          priority: _ThumbnailRequestPriority.visible,
+        );
       }
     }
   }
@@ -960,19 +1055,82 @@ class LocalPickerProvider with ChangeNotifier {
 
   void _rebuildAndWarmVisibleEntries({required bool resetVisible}) {
     _rebuildVisibleEntries(resetVisible: resetVisible);
+    _pruneQueuedThumbnailRequests(
+      targetDimension: _preferredVisibleThumbnailDimension(),
+    );
     _warmVisibleRange(startIndex: 0, count: _visibleCount);
   }
 
   void _scheduleThumbnailNotify() {
-    if (_thumbnailNotifyScheduled || _disposed) {
+    if (_thumbnailNotifyTimer != null || _disposed) {
       return;
     }
-    _thumbnailNotifyScheduled = true;
-    scheduleMicrotask(() {
-      _thumbnailNotifyScheduled = false;
+    _thumbnailNotifyTimer = Timer(const Duration(milliseconds: 16), () {
+      _thumbnailNotifyTimer = null;
       if (!_disposed) {
         notifyListeners();
       }
+    });
+  }
+
+  void _enqueueIdleIsolate(int index) {
+    if (_idleIsolateIndices.contains(index)) {
+      return;
+    }
+    _idleIsolateIndices.add(index);
+  }
+
+  void _pruneQueuedThumbnailRequests({required int targetDimension}) {
+    if (_requestQueue.isEmpty) {
+      return;
+    }
+    final visiblePaths = _filteredImageEntries
+        .take(_visibleCount)
+        .map((entry) => entry.path)
+        .toSet();
+    _requestQueue.removeWhere((request) {
+      final shouldRemove =
+          request.targetDimension != targetDimension ||
+          !visiblePaths.contains(request.path);
+      if (shouldRemove) {
+        _queuedGeneration.remove(request.requestKey);
+      }
+      return shouldRemove;
+    });
+  }
+
+  void _promoteQueuedThumbnailRequest(
+    String requestKey, {
+    required _ThumbnailRequestPriority priority,
+  }) {
+    final requestIndex = _requestQueue.indexWhere(
+      (request) => request.requestKey == requestKey,
+    );
+    if (requestIndex == -1) {
+      return;
+    }
+
+    final existingRequest = _requestQueue[requestIndex];
+    if (existingRequest.priority.index <= priority.index) {
+      return;
+    }
+
+    _requestQueue[requestIndex] = _ThumbnailRequest(
+      existingRequest.path,
+      existingRequest.targetDimension,
+      existingRequest.cachePath,
+      existingRequest.requestKey,
+      priority: priority,
+      sequence: existingRequest.sequence,
+    );
+    _requestQueue.sort((first, second) {
+      final priorityCompare = first.priority.index.compareTo(
+        second.priority.index,
+      );
+      if (priorityCompare != 0) {
+        return priorityCompare;
+      }
+      return first.sequence.compareTo(second.sequence);
     });
   }
 
