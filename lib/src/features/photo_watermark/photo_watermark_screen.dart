@@ -6,7 +6,6 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../shared/widgets/feature_page_layout.dart';
 import '../../shared/widgets/responsive_layout.dart';
-import '../../shared/widgets/semantic_summary_region.dart';
 import 'photo_watermark_provider.dart';
 import 'widgets/watermark_preview.dart';
 import 'widgets/watermark_settings.dart';
@@ -190,24 +189,11 @@ class _PhotoWatermarkScreenState extends State<PhotoWatermarkScreen> {
   /// 构建移动端布局
   Widget _buildMobileLayout(bool hasBatchTasks) {
     final List<Widget> children = [
-      KeyedSubtree(
-        key: const ValueKey<String>('watermark_mobile_settings'),
-        child: _buildLeftPanel(isMobile: true),
-      ),
-      KeyedSubtree(
-        key: const ValueKey<String>('watermark_mobile_preview'),
-        child: _buildCenterPanel(),
-      ),
-      if (hasBatchTasks)
-        KeyedSubtree(
-          key: const ValueKey<String>('watermark_mobile_batch'),
-          child: _buildRightPanel(isMobile: true, hasBatchTasks: true),
-        ),
+      _buildLeftPanel(isMobile: true),
+      _buildCenterPanel(),
+      if (hasBatchTasks) _buildRightPanel(isMobile: true, hasBatchTasks: true),
     ];
-    return TabBarView(
-      physics: const NeverScrollableScrollPhysics(),
-      children: children,
-    );
+    return TabBarView(children: children);
   }
 
   /// 构建左侧设置面板
@@ -239,12 +225,7 @@ class _PhotoWatermarkScreenState extends State<PhotoWatermarkScreen> {
             ],
           ),
         ),
-        const Expanded(
-          child: SemanticSummaryRegion(
-            label: '照片水印设置区域',
-            child: WatermarkSettings(),
-          ),
-        ),
+        const Expanded(child: WatermarkSettings()),
         const _PhotoWatermarkActionPanel(),
       ],
     );
@@ -271,10 +252,7 @@ class _PhotoWatermarkScreenState extends State<PhotoWatermarkScreen> {
         selector: (context, provider) => provider.currentImage != null,
         builder: (context, hasCurrentImage, _) {
           if (hasCurrentImage) {
-            return const SemanticSummaryRegion(
-              label: '照片水印预览区域',
-              child: RepaintBoundary(child: WatermarkPreview()),
-            );
+            return const RepaintBoundary(child: WatermarkPreview());
           }
           return Center(
             child: Column(
@@ -360,15 +338,10 @@ class _PhotoWatermarkScreenState extends State<PhotoWatermarkScreen> {
       return const SizedBox.shrink();
     }
 
-    final panelContent = Column(
-      children: const [
+    final panelContent = const Column(
+      children: [
         _PhotoWatermarkBatchPanelHeader(),
-        Expanded(
-          child: SemanticSummaryRegion(
-            label: '照片水印批处理列表',
-            child: BatchProcessList(),
-          ),
-        ),
+        Expanded(child: BatchProcessList()),
       ],
     );
 
@@ -673,17 +646,6 @@ class _PhotoWatermarkBatchPanelHeader extends StatelessWidget {
 
 class _PhotoWatermarkDragOverlay extends StatelessWidget {
   const _PhotoWatermarkDragOverlay();
-
-  @override
-  Widget build(BuildContext context) {
-    return const ExcludeSemantics(
-      child: SizedBox.expand(child: _PhotoWatermarkDragOverlayBody()),
-    );
-  }
-}
-
-class _PhotoWatermarkDragOverlayBody extends StatelessWidget {
-  const _PhotoWatermarkDragOverlayBody();
 
   @override
   Widget build(BuildContext context) {

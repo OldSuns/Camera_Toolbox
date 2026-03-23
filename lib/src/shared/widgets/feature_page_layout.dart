@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'responsive_layout.dart';
@@ -13,8 +12,6 @@ class FeaturePageLayout extends StatelessWidget {
     this.expandBody = true,
     this.showTitleOnMobile = false,
     this.headerPadding = const EdgeInsets.fromLTRB(16, 16, 16, 12),
-    this.bodySemanticLabel,
-    this.disableComplexBodySemanticsOnWindows = true,
   });
 
   final String title;
@@ -24,25 +21,12 @@ class FeaturePageLayout extends StatelessWidget {
   final bool expandBody;
   final bool showTitleOnMobile;
   final EdgeInsetsGeometry headerPadding;
-  final String? bodySemanticLabel;
-  final bool disableComplexBodySemanticsOnWindows;
 
   @override
   Widget build(BuildContext context) {
     final isMobile = ResponsiveLayout.isMobile(context);
     final showTitle = showTitleOnMobile || !isMobile;
     final hasHeader = showTitle || actions.isNotEmpty;
-    final shouldGuardBodySemantics =
-        disableComplexBodySemanticsOnWindows &&
-        !kIsWeb &&
-        defaultTargetPlatform == TargetPlatform.windows;
-    final body = shouldGuardBodySemantics
-        ? Semantics(
-            container: true,
-            label: bodySemanticLabel ?? '$title 页面内容区域',
-            child: ExcludeSemantics(child: child),
-          )
-        : child;
 
     return Material(
       color: backgroundColor ?? Theme.of(context).scaffoldBackgroundColor,
@@ -88,7 +72,7 @@ class FeaturePageLayout extends StatelessWidget {
                       ),
                     ),
             ),
-          if (expandBody) Expanded(child: body) else body,
+          if (expandBody) Expanded(child: child) else child,
         ],
       ),
     );

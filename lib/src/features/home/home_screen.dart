@@ -23,12 +23,12 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen>
     with AutomaticKeepAliveClientMixin {
+  final Map<int, Widget> _pageCache = {};
+  final Set<int> _visitedPages = {0};
+
   void _onDestinationSelected(int index) {
-    final navigationProvider = Provider.of<NavigationProvider>(
-      context,
-      listen: false,
-    );
-    navigationProvider.setIndex(index);
+    _visitedPages.add(index);
+    Provider.of<NavigationProvider>(context, listen: false).setIndex(index);
     if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
       // 从 AppPage 枚举动态获取标题，确保一致性
       windowManager.setTitle('相机工具箱 - ${AppPage.values[index].title}');
@@ -58,6 +58,10 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
+  Widget _pageForIndex(int index) {
+    return _pageCache.putIfAbsent(index, () => _buildPage(index));
+  }
+
   @override
   bool get wantKeepAlive => true;
 
@@ -69,9 +73,26 @@ class _HomeScreenState extends State<HomeScreen>
         return AdaptiveNavigation(
           currentIndex: navigationProvider.currentIndex,
           onDestinationSelected: _onDestinationSelected,
-          child: KeyedSubtree(
-            key: ValueKey<int>(navigationProvider.currentIndex),
-            child: _buildPage(navigationProvider.currentIndex),
+          child: Stack(
+            children: List.generate(AppPage.values.length, (index) {
+              if (!_visitedPages.contains(index)) {
+                return const SizedBox.shrink();
+              }
+
+              final isCurrent = navigationProvider.currentIndex == index;
+              return Visibility(
+                visible: isCurrent,
+                maintainState: true,
+                maintainAnimation: true,
+                maintainSize: false,
+                maintainSemantics: false,
+                maintainInteractivity: false,
+                child: TickerMode(
+                  enabled: isCurrent,
+                  child: _pageForIndex(index),
+                ),
+              );
+            }),
           ),
         );
       },

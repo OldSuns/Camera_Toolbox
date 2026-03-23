@@ -5,7 +5,6 @@ import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
 import '../../shared/widgets/feature_page_layout.dart';
 import '../../shared/widgets/responsive_layout.dart';
-import '../../shared/widgets/semantic_summary_region.dart';
 import 'image_compress_service.dart';
 
 class ImageCompressScreen extends StatefulWidget {
@@ -176,13 +175,7 @@ class _ImageCompressScreenState extends State<ImageCompressScreen> {
           ),
         ),
         const VerticalDivider(width: 16),
-        Expanded(
-          flex: 1,
-          child: const SemanticSummaryRegion(
-            label: '图像压缩设置区域',
-            child: _ImageCompressOptionsHost(),
-          ),
-        ),
+        Expanded(flex: 1, child: _buildOptionsPanel()),
       ],
     );
   }
@@ -201,10 +194,7 @@ class _ImageCompressScreenState extends State<ImageCompressScreen> {
             _buildStatusBar(),
           ],
         ),
-        const SemanticSummaryRegion(
-          label: '图像压缩设置区域',
-          child: _ImageCompressOptionsHost(isMobile: true),
-        ),
+        _buildOptionsPanel(isMobile: true),
       ],
     );
   }
@@ -284,21 +274,6 @@ class _ImageCompressScreenState extends State<ImageCompressScreen> {
         });
       },
     );
-  }
-}
-
-class _ImageCompressOptionsHost extends StatelessWidget {
-  const _ImageCompressOptionsHost({this.isMobile = false});
-
-  final bool isMobile;
-
-  @override
-  Widget build(BuildContext context) {
-    final state = context.findAncestorStateOfType<_ImageCompressScreenState>();
-    if (state == null) {
-      return const SizedBox.shrink();
-    }
-    return state._buildOptionsPanel(isMobile: isMobile);
   }
 }
 
@@ -419,112 +394,102 @@ class _ImageCompressDataTable extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer<ImageCompressService>(
       builder: (context, service, _) {
-        final statusSummary = service.selectedImages.isEmpty
-            ? '当前没有待压缩图片'
-            : '压缩文件列表，共 ${service.selectedImages.length} 张图片';
-
-        return Semantics(
-          container: true,
-          label: statusSummary,
-          child: ExcludeSemantics(
-            child: DataTable2(
-              columnSpacing: 20,
-              horizontalMargin: 12,
-              minWidth: 600,
-              sortColumnIndex: sortColumnIndex,
-              sortAscending: sortAscending,
-              isHorizontalScrollBarVisible: true,
-              isVerticalScrollBarVisible: true,
-              columns: [
-                DataColumn2(
-                  label: const Text('名称'),
-                  size: ColumnSize.L,
-                  onSort: (columnIndex, ascending) {
-                    onSort(service, columnIndex, ascending);
-                  },
-                ),
-                DataColumn2(
-                  label: const Text('大小'),
-                  size: ColumnSize.S,
-                  onSort: (columnIndex, ascending) {
-                    onSort(service, columnIndex, ascending);
-                  },
-                ),
-                DataColumn2(
-                  label: const Text('分辨率'),
-                  size: ColumnSize.M,
-                  onSort: (columnIndex, ascending) {
-                    onSort(service, columnIndex, ascending);
-                  },
-                ),
-                DataColumn2(
-                  label: const Text('节省了'),
-                  size: ColumnSize.S,
-                  onSort: (columnIndex, ascending) {
-                    onSort(service, columnIndex, ascending);
-                  },
-                ),
-                const DataColumn2(label: Text('状态'), size: ColumnSize.M),
-              ],
-              rows: service.selectedImages.map((file) {
-                final isSelected = selectedRowPaths.contains(file.filePath);
-                return DataRow(
-                  selected: isSelected,
-                  onSelectChanged: (selected) {
-                    onRowSelectionChanged(file.filePath, selected ?? false);
-                  },
-                  cells: [
-                    DataCell(
-                      Row(
-                        children: [
-                          Expanded(child: Text(file.name)),
-                          if (file.isCompleted)
-                            const Icon(
-                              Icons.check_circle,
-                              color: Colors.green,
-                              size: 16,
-                            )
-                          else if (file.status == 'error')
-                            const Icon(Icons.error, color: Colors.red, size: 16)
-                          else if (file.isCompressing)
-                            const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            ),
-                        ],
-                      ),
-                    ),
-                    DataCell(Text(file.size)),
-                    DataCell(Text(file.resolution)),
-                    DataCell(Text(file.compressionSavings)),
-                    DataCell(
-                      file.isCompressing
-                          ? LinearProgressIndicator(value: file.progress)
-                          : file.status == 'error'
-                          ? Tooltip(
-                              message: file.errorMessage ?? '压缩失败',
-                              child: Text(
-                                '失败',
-                                style: const TextStyle(color: Colors.red),
-                              ),
-                            )
-                          : file.isCompleted
-                          ? Text(
-                              file.status == 'skipped' ? '已跳过' : '已完成',
-                              style: TextStyle(
-                                color: file.status == 'skipped'
-                                    ? Colors.orange
-                                    : Colors.green,
-                              ),
-                            )
-                          : const Text('等待中'),
-                    ),
-                  ],
-                );
-              }).toList(),
+        return DataTable2(
+          columnSpacing: 20,
+          horizontalMargin: 12,
+          minWidth: 600,
+          sortColumnIndex: sortColumnIndex,
+          sortAscending: sortAscending,
+          isHorizontalScrollBarVisible: true,
+          isVerticalScrollBarVisible: true,
+          columns: [
+            DataColumn2(
+              label: const Text('名称'),
+              size: ColumnSize.L,
+              onSort: (columnIndex, ascending) {
+                onSort(service, columnIndex, ascending);
+              },
             ),
-          ),
+            DataColumn2(
+              label: const Text('大小'),
+              size: ColumnSize.S,
+              onSort: (columnIndex, ascending) {
+                onSort(service, columnIndex, ascending);
+              },
+            ),
+            DataColumn2(
+              label: const Text('分辨率'),
+              size: ColumnSize.M,
+              onSort: (columnIndex, ascending) {
+                onSort(service, columnIndex, ascending);
+              },
+            ),
+            DataColumn2(
+              label: const Text('节省了'),
+              size: ColumnSize.S,
+              onSort: (columnIndex, ascending) {
+                onSort(service, columnIndex, ascending);
+              },
+            ),
+            const DataColumn2(label: Text('状态'), size: ColumnSize.M),
+          ],
+          rows: service.selectedImages.map((file) {
+            final isSelected = selectedRowPaths.contains(file.filePath);
+            return DataRow(
+              selected: isSelected,
+              onSelectChanged: (selected) {
+                onRowSelectionChanged(file.filePath, selected ?? false);
+              },
+              cells: [
+                DataCell(
+                  Row(
+                    children: [
+                      Expanded(child: Text(file.name)),
+                      if (file.isCompleted)
+                        const Icon(
+                          Icons.check_circle,
+                          color: Colors.green,
+                          size: 16,
+                        )
+                      else if (file.status == 'error')
+                        const Icon(Icons.error, color: Colors.red, size: 16)
+                      else if (file.isCompressing)
+                        const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                    ],
+                  ),
+                ),
+                DataCell(Text(file.size)),
+                DataCell(Text(file.resolution)),
+                DataCell(Text(file.compressionSavings)),
+                DataCell(
+                  file.isCompressing
+                      ? LinearProgressIndicator(value: file.progress)
+                      : file.status == 'error'
+                      ? Tooltip(
+                          message: file.errorMessage ?? '压缩失败',
+                          child: Text(
+                            '失败',
+                            style: const TextStyle(color: Colors.red),
+                          ),
+                        )
+                      : file.isCompleted
+                      ? Text(
+                          file.status == 'skipped' ? '已跳过' : '已完成',
+                          style: TextStyle(
+                            color: file.status == 'skipped'
+                                ? Colors.orange
+                                : Colors.green,
+                          ),
+                        )
+                      : const Text('等待中'),
+                ),
+              ],
+            );
+          }).toList(),
         );
       },
     );
@@ -555,42 +520,33 @@ class _ImageCompressWindowsList extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer<ImageCompressService>(
       builder: (context, service, _) {
-        final statusSummary = service.selectedImages.isEmpty
-            ? '当前没有待压缩图片'
-            : '压缩文件列表，共 ${service.selectedImages.length} 张图片';
-
-        return Semantics(
-          container: true,
-          label: statusSummary,
-          child: Column(
-            children: [
-              _ImageCompressWindowsHeader(
-                sortColumnIndex: sortColumnIndex,
-                sortAscending: sortAscending,
-                service: service,
-                onSort: onSort,
+        return Column(
+          children: [
+            _ImageCompressWindowsHeader(
+              sortColumnIndex: sortColumnIndex,
+              sortAscending: sortAscending,
+              service: service,
+              onSort: onSort,
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: ListView.separated(
+                itemCount: service.selectedImages.length,
+                itemBuilder: (context, index) {
+                  final file = service.selectedImages[index];
+                  final isSelected = selectedRowPaths.contains(file.filePath);
+                  return _ImageCompressWindowsRow(
+                    file: file,
+                    isSelected: isSelected,
+                    onSelectionChanged: (selected) {
+                      onRowSelectionChanged(file.filePath, selected);
+                    },
+                  );
+                },
+                separatorBuilder: (context, index) => const SizedBox(height: 8),
               ),
-              const SizedBox(height: 8),
-              Expanded(
-                child: ListView.separated(
-                  itemCount: service.selectedImages.length,
-                  itemBuilder: (context, index) {
-                    final file = service.selectedImages[index];
-                    final isSelected = selectedRowPaths.contains(file.filePath);
-                    return _ImageCompressWindowsRow(
-                      file: file,
-                      isSelected: isSelected,
-                      onSelectionChanged: (selected) {
-                        onRowSelectionChanged(file.filePath, selected);
-                      },
-                    );
-                  },
-                  separatorBuilder: (context, index) =>
-                      const SizedBox(height: 8),
-                ),
-              ),
-            ],
-          ),
+            ),
+          ],
         );
       },
     );
